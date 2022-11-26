@@ -13,32 +13,35 @@
 # limitations under the License.
 
 ###############################################################################
-# Transfer file to S3 presigned URL.
+# Transfer file to IBM Cloud Object Storage.
 # Globals:
 #   None
 # Requires:
 #   None
 # Arguments:
 #   $1: source file
-#   $2: S3 presigned URL
+#   $2: URL (https://[endpoint]/[bucket-name]/[object-key]).
+#   $3: API key / token
 # Outputs:
 #   None.
 # Exit Status:
 #   Exit with status 0 on success.
 #   Exit with status greater than 0 if errors occur.
 ###############################################################################
-s3_presigned_url_transfer()
+ibm_cos_transfer()
 {
-  pu_source="${1:-}"
-  pu_s3_presigned_url="${2:-}"
+  it_source="${1:-}"
+  it_url="${2:-}"
+  it_api_key="${3:-}"
 
   curl \
     --fail \
     --request PUT \
+    --header "Authorization: Bearer ${it_api_key}" \
     --header "Content-Type: application/octet-stream" \
     --header "Accept: */*" \
     --header "Expect: 100-continue" \
-    --upload-file "${pu_source}" \
-    "${pu_s3_presigned_url}"
+    --upload-file "${it_source}" \
+    "${it_url}"
 
 }
