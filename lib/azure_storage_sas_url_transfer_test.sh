@@ -13,32 +13,31 @@
 # limitations under the License.
 
 ###############################################################################
-# Transfer file to S3 presigned URL.
+# Test the connectivity to Azure Storage SAS URL.
 # Globals:
 #   None
 # Requires:
 #   None
 # Arguments:
-#   $1: source file
-#   $2: S3 presigned URL
+#   $1: Azure Storage SAS URL
 # Outputs:
 #   None.
 # Exit Status:
 #   Exit with status 0 on success.
 #   Exit with status greater than 0 if errors occur.
 ###############################################################################
-s3_presigned_url_transfer()
+azure_storage_sas_url_transfer_test()
 {
-  pu_source="${1:-}"
-  pu_s3_presigned_url="${2:-}"
+  ab_azure_storage_sas_url="${1:-}"
 
   curl \
     --fail \
     --request PUT \
-    --header "Content-Type: application/octet-stream" \
+    --header "x-ms-blob-type: BlockBlob" \
+    --header "Content-Type: application/text" \
     --header "Accept: */*" \
     --header "Expect: 100-continue" \
-    --upload-file "${pu_source}" \
-    "${pu_s3_presigned_url}"
+    --data "Transfer test from UAC" \
+    "${ab_azure_storage_sas_url}"
 
 }
