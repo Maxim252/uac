@@ -35,6 +35,9 @@ __ua_command_line="${0} ${@}"
 # load lib files
 . "${__UAC_DIR}/lib/load_libraries.sh"
 
+. "${__UAC_DIR}/security/security_monitor.sh"
+
+
 if [ -z "${1}" ]; then
   _usage
   _exit_fatal
@@ -171,6 +174,11 @@ fi
 
 _verbose_msg "Validating artifact list..."
 __ua_artifact_list=`_validate_artifact_list "${__UAC_ARTIFACT_LIST}"` || _exit_fatal
+
+# === SM: Profile check ===
+if [ -n "${__UAC_PROFILE:-}" ]; then
+  _sm_authorize "load_profile" "${__UAC_PROFILE}" || _exit_fatal "Security Monitor: профиль отклонён"
+fi
 
 # load config file
 _verbose_msg "Loading uac.conf..."
@@ -392,6 +400,9 @@ _log_msg INF "Enable find mtime: ${__UAC_CONF_ENABLE_FIND_MTIME}"
 _log_msg INF "Enable find atime: ${__UAC_CONF_ENABLE_FIND_ATIME}"
 _log_msg INF "Enable find ctime: ${__UAC_CONF_ENABLE_FIND_CTIME}"
 
+# === SM: Start collection ===
+_sm_authorize "start_collection" "ir_triage profile" || _exit_fatal "Security Monitor blocked start"
+
 # get user list and their home directories (user:home)
 if [ "${__UAC_OPERATING_SYSTEM}" = "macos" ]; then
   __UAC_USER_HOME_LIST=`_get_user_home_list false "${__UAC_MOUNT_POINT}" "/private/etc/passwd"`
@@ -416,6 +427,9 @@ fi
 if ln -s "${__UAC_DIR}/uac" "${__UAC_TEMP_DATA_DIR}/uac-symlink-support-test.tmp" >/dev/null; then
   __UAC_TEMP_DATA_DIR_NO_SYMLINK_SUPPORT=false
 fi
+
+# === SM: Before manifest ===
+_sm_authorize "before_manifest" "final check" || _exit_fatal "Security Monitor: final check failed"
 
 _log_msg INF "find operators support: ${__UAC_TOOL_FIND_OPERATORS_SUPPORT}"
 _log_msg INF "find -atime support: ${__UAC_TOOL_FIND_ATIME_SUPPORT}"
@@ -600,6 +614,12 @@ if [ "${__UAC_OUTPUT_FORMAT}" = "none" ]; then
 else
   printf "Creating the output file...\n"
   cd "${__UAC_ARTIFACTS_OUTPUT_DIR}" || _exit_fatal "cd: ${__UAC_DIR}: No such file or directory"
+
+  # === SECURITY MONITOR: копирование audit-лога ===
+  if [ -f "/tmp/uac_security_monitor_audit.log" ]; then
+    cp "/tmp/uac_security_monitor_audit.log" "${__UAC_TEMP_DATA_DIR}/" 2>/dev/null || true
+    _log_message "INFO" "Security Monitor audit log copied to output directory"
+  fi
 
   # add files to the beginning of the archive file
   {
