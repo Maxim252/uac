@@ -1,0 +1,3 @@
+ir_triage
+full
+linux

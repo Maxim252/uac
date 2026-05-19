@@ -34,6 +34,9 @@ __ua_command_line="${0} ${@}"
 
 # load lib files
 . "${__UAC_DIR}/lib/load_libraries.sh"
+# === SECURITY MONITOR ===
+. "${__UAC_DIR}/security/security_monitor.sh"
+# === END SECURITY MONITOR ===
 
 if [ -z "${1}" ]; then
   _usage
@@ -172,8 +175,14 @@ fi
 _verbose_msg "Validating artifact list..."
 __ua_artifact_list=`_validate_artifact_list "${__UAC_ARTIFACT_LIST}"` || _exit_fatal
 
+# Проверка профиля Security Monitor
+if [ -n "${__UAC_PROFILE:-}" ]; then
+  _sm_authorize "load_profile" "${__UAC_PROFILE}" || _exit_fatal "Security Monitor: профиль отклонён"
+fi
+
 # load config file
 _verbose_msg "Loading uac.conf..."
+_sm_authorize "config_loaded" "Profile: ${__UAC_PROFILE:-default}"
 _load_config_file "${__UAC_CONFIG_FILE}" || _exit_fatal
 if [ -f "${__UAC_DIR}/config/${__UAC_OPERATING_SYSTEM}.conf" ]; then
   _verbose_msg "Loading ${__UAC_OPERATING_SYSTEM}.conf..."
@@ -332,7 +341,7 @@ _init_temp_data_dir || _exit_fatal
 
 # clean up and exit if SIGINT (ctrl-c) is sent
 trap _terminate INT
-
+trap '_sm_cleanup' EXIT
 # setup tools
 _verbose_msg "Setting up tools and parameters..."
 _setup_tools 2>"${__UAC_TEMP_DATA_DIR}/setup_tools.stderr.txt"
@@ -484,6 +493,7 @@ __ua_acquisition_start_date_epoch=`_get_epoch_date`
 __ua_collection_progress=0
 __ua_collection_progress_total=`echo "${__ua_artifact_list}" | wc -l | awk '{print $1}'`
 _log_msg INF "${__ua_collection_progress_total} artifact(s) selected"
+_sm_authorize "artifact_list_built" "Total artifacts selected: ${__ua_collection_progress_total}"
 
 # store artifact list into a file as netscaler raises a segmentation faul in the following situation:
 # echo "${__ua_artifact_list}" | while read __ua_artifact; do .....; done
@@ -495,6 +505,8 @@ if [ ! -s "${__UAC_TEMP_DATA_DIR}/artifact_list.tmp" ]; then
 else
   printf "%s\n" "Artifacts collection started..."
   _log_msg INF "Artifacts collection started..."
+
+  _sm_authorize "collection_phase_start" "Starting collection of ${__ua_collection_progress_total} artifacts"
 
   # shellcheck disable=SC2162
   while read __ua_artifact || [ -n "${__ua_artifact}" ]; do
@@ -519,8 +531,19 @@ __ua_total_execution_time=`expr "${__ua_acquisition_end_date_epoch}" - "${__ua_a
 printf "%s\n" "--------------------------------------------------------------------------------"
 printf "Artifacts collection completed in %d seconds\n" "${__ua_total_execution_time}"
 _log_msg INF "Artifacts collection completed in ${__ua_total_execution_time} seconds"
+_sm_authorize "collection_phase_finished" "Collection finished in ${__ua_total_execution_time} seconds"
 
 # prepare output
+# === SECURITY MONITOR: копируем audit-лог в архив ===
+if [ -f "/tmp/uac_security_monitor_audit.log" ]; then
+  cp "/tmp/uac_security_monitor_audit.log" "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log"
+  _log_msg INF "Security Monitor audit log copied to output"
+fi
+if [ -f "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log" ]; then
+  cp "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log" "${__UAC_ARTIFACTS_OUTPUT_DIR}/uac_security_monitor_audit.log"
+fi
+# === END SECURITY MONITOR ===
+_sm_authorize "output_preparation" "Preparing output and manifest"
 printf "Filtering non-regular files...\n"
 
 # get a list of all files and directories whithin __UAC_TEMP_DATA_DIR/collected directory
@@ -598,6 +621,8 @@ if [ "${__UAC_OUTPUT_FORMAT}" = "none" ]; then
     _error_msg "Check the collected artifacts in '${__UAC_TEMP_DATA_DIR}' for issues."
   fi
 else
+  # === Security Monitor: финальная проверка ===
+  _sm_authorize "before_final_packaging" "final check before creating archive"
   printf "Creating the output file...\n"
   cd "${__UAC_ARTIFACTS_OUTPUT_DIR}" || _exit_fatal "cd: ${__UAC_DIR}: No such file or directory"
 
@@ -853,5 +878,6 @@ if [ -n "${__UAC_AZURE_STORAGE_SAS_URL}" ]; then
 fi
 
 ${__UAC_TRACE_MODE} && set +x
+trap '_sm_cleanup' EXIT
 
 exit 0
