@@ -92,6 +92,7 @@ if [ -n "${__UAC_DIR:-}" ] || [ -f "./uac" ]; then
   _sm_init
 fi
 
+# Перемещает лог монитора в uac-data.tmp, если он был создан в /tmp
 _sm_move_log_to_output() {
   if [ -n "${__UAC_TEMP_DATA_DIR:-}" ] && [ -f "/tmp/uac_security_monitor_audit.log" ]; then
     mv "/tmp/uac_security_monitor_audit.log" "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log" 2>/dev/null || true

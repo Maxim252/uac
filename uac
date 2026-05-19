@@ -2,6 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # shellcheck disable=SC1091,SC2006
 
+# === SECURITY MONITOR: автоматическое перемещение лога ===
+trap '
+    if command -v _sm_move_log_to_output >/dev/null 2>&1; then
+        _sm_move_log_to_output 2>/dev/null || true
+    fi
+' EXIT
+
 # remove all existing aliases
 \unalias -a
 
@@ -337,6 +344,9 @@ fi
 __UAC_ARTIFACTS_OUTPUT_DIR="${__UAC_TEMP_DATA_DIR}/collected"
 _verbose_msg "Creating uac-data.tmp directory..."
 _init_temp_data_dir || _exit_fatal
+
+# === SECURITY MONITOR: перемещение лога ===
+_sm_move_log_to_output
 
 # clean up and exit if SIGINT (ctrl-c) is sent
 trap _terminate INT
