@@ -1,6 +1,5 @@
 #!/bin/sh
-# SPDX-License-Identifier: Apache-2.0
-
+# SPDX-License-Identifier: Apache-2.01
 usage() {
     cat <<EOM
 Extract lists of different file and directory types from mactime bodyfile

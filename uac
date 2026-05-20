@@ -1,17 +1,9 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
 # shellcheck disable=SC1091,SC2006
-
-# === SECURITY MONITOR: автоматическое перемещение лога ===
-trap '
-    if command -v _sm_move_log_to_output >/dev/null 2>&1; then
-        _sm_move_log_to_output 2>/dev/null || true
-    fi
-' EXIT
-
 # remove all existing aliases
-\unalias -a
 
+\unalias -a
 # remove LD_PRELOAD environment variable
 unset LD_PRELOAD
 
@@ -41,7 +33,7 @@ __ua_command_line="${0} ${@}"
 
 # load lib files
 . "${__UAC_DIR}/lib/load_libraries.sh"
-
+# === SECURITY MONITOR ===
 . "${__UAC_DIR}/security/security_monitor.sh"
 
 
@@ -182,13 +174,28 @@ fi
 _verbose_msg "Validating artifact list..."
 __ua_artifact_list=`_validate_artifact_list "${__UAC_ARTIFACT_LIST}"` || _exit_fatal
 
-# === SM: Profile check ===
+# ============================================================
+# === Security Monitor: ПРЯМАЯ проверка профиля ===
+# ============================================================
 if [ -n "${__UAC_PROFILE:-}" ]; then
-  _sm_authorize "load_profile" "${__UAC_PROFILE}" || _exit_fatal "Security Monitor: профиль отклонён"
+  echo ">>> [Security Monitor] Проверка целостности профиля: ${__UAC_PROFILE}" >&2
+
+  if ! _sm_check_profile_integrity "${__UAC_PROFILE}"; then
+    echo ""
+    echo ">>> [SECURITY MONITOR] ПРОФИЛЬ ПОДМЕНЁН ИЛИ ПОВРЕЖДЁН — ЗАПУСК ОСТАНОВЛЕН <<<"
+    echo ""
+    _sm_log_event "BLOCK" "PROFILE_CHECK" "${__UAC_PROFILE}" "BLOCK" "Direct profile integrity check failed" ""
+    _exit_fatal "Security Monitor: профиль отклонён (хэш не совпадает — возможна подмена)"
+  fi
+
+  echo ">>> [Security Monitor] Профиль '${__UAC_PROFILE}' прошёл проверку." >&2
 fi
+# ============================================================
+
 
 # load config file
 _verbose_msg "Loading uac.conf..."
+_sm_authorize "config_loaded" "Profile: ${__UAC_PROFILE:-default}"
 _load_config_file "${__UAC_CONFIG_FILE}" || _exit_fatal
 if [ -f "${__UAC_DIR}/config/${__UAC_OPERATING_SYSTEM}.conf" ]; then
   _verbose_msg "Loading ${__UAC_OPERATING_SYSTEM}.conf..."
@@ -345,12 +352,9 @@ __UAC_ARTIFACTS_OUTPUT_DIR="${__UAC_TEMP_DATA_DIR}/collected"
 _verbose_msg "Creating uac-data.tmp directory..."
 _init_temp_data_dir || _exit_fatal
 
-# === SECURITY MONITOR: перемещение лога ===
-_sm_move_log_to_output
-
 # clean up and exit if SIGINT (ctrl-c) is sent
 trap _terminate INT
-
+trap '_sm_cleanup' EXIT
 # setup tools
 _verbose_msg "Setting up tools and parameters..."
 _setup_tools 2>"${__UAC_TEMP_DATA_DIR}/setup_tools.stderr.txt"
@@ -508,6 +512,7 @@ __ua_acquisition_start_date_epoch=`_get_epoch_date`
 __ua_collection_progress=0
 __ua_collection_progress_total=`echo "${__ua_artifact_list}" | wc -l | awk '{print $1}'`
 _log_msg INF "${__ua_collection_progress_total} artifact(s) selected"
+_sm_authorize "artifact_list_built" "Total artifacts selected: ${__ua_collection_progress_total}"
 
 # store artifact list into a file as netscaler raises a segmentation faul in the following situation:
 # echo "${__ua_artifact_list}" | while read __ua_artifact; do .....; done
@@ -519,6 +524,13 @@ if [ ! -s "${__UAC_TEMP_DATA_DIR}/artifact_list.tmp" ]; then
 else
   printf "%s\n" "Artifacts collection started..."
   _log_msg INF "Artifacts collection started..."
+
+  if command -v _sm_authorize >/dev/null 2>&1; then
+  _sm_authorize "execute_binary" "${__UAC_DIR}/bin/linux/avml" || _exit_fatal "Security Monitor blocked avml"
+  _sm_authorize "execute_binary" "${__UAC_DIR}/bin/timeout.sh" || _exit_fatal "Security Monitor blocked timeout.sh"
+  fi
+
+  _sm_authorize "collection_phase_start" "Starting collection of ${__ua_collection_progress_total} artifacts"
 
   # shellcheck disable=SC2162
   while read __ua_artifact || [ -n "${__ua_artifact}" ]; do
@@ -543,8 +555,19 @@ __ua_total_execution_time=`expr "${__ua_acquisition_end_date_epoch}" - "${__ua_a
 printf "%s\n" "--------------------------------------------------------------------------------"
 printf "Artifacts collection completed in %d seconds\n" "${__ua_total_execution_time}"
 _log_msg INF "Artifacts collection completed in ${__ua_total_execution_time} seconds"
+_sm_authorize "collection_phase_finished" "Collection finished in ${__ua_total_execution_time} seconds"
 
 # prepare output
+# === SECURITY MONITOR: копируем audit-лог в архив ===
+if [ -f "/tmp/uac_security_monitor_audit.log" ]; then
+  cp "/tmp/uac_security_monitor_audit.log" "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log"
+  _log_msg INF "Security Monitor audit log copied to output"
+fi
+if [ -f "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log" ]; then
+  cp "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log" "${__UAC_ARTIFACTS_OUTPUT_DIR}/uac_security_monitor_audit.log"
+fi
+# === END SECURITY MONITOR ===
+_sm_authorize "output_preparation" "Preparing output and manifest"
 printf "Filtering non-regular files...\n"
 
 # get a list of all files and directories whithin __UAC_TEMP_DATA_DIR/collected directory
@@ -582,6 +605,11 @@ if [ "${__UAC_OUTPUT_FORMAT}" = "none" ] || ${__UAC_HASH_COLLECTED} || ${__UAC_T
 
   if ${__UAC_HASH_COLLECTED}; then
     printf "Calculating hashes for collected files...\n"
+
+    if command -v _sm_authorize >/dev/null 2>&1; then
+    _sm_authorize "execute_binary" "${__UAC_DIR}/bin/stat.pl" || _exit_fatal "Security Monitor blocked    stat.pl"
+    fi
+
     cd "${__UAC_ARTIFACTS_OUTPUT_DIR}" || _exit_fatal "cd: ${__UAC_ARTIFACTS_OUTPUT_DIR}: No such file or directory"
 
     _find_based_collector \
@@ -622,13 +650,34 @@ if [ "${__UAC_OUTPUT_FORMAT}" = "none" ]; then
     _error_msg "Check the collected artifacts in '${__UAC_TEMP_DATA_DIR}' for issues."
   fi
 else
+
+  # === Security Monitor: финальная проверка ===
+  _sm_authorize "before_final_packaging" "final check before creating archive"
+
   printf "Creating the output file...\n"
+
+  # === ЯВНОЕ КОПИРОВАНИЕ AUDIT-ЛОГА МОНИТОРА В АРХИВ ===
+  if [ -f "/tmp/uac_security_monitor_audit.log" ]; then
+      cp "/tmp/uac_security_monitor_audit.log" "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log" 2>/dev/null || true
+
+      if command -v _log_msg >/dev/null 2>&1; then
+          _log_msg INF "Security Monitor audit log copied to output directory"
+      else
+          printf "Security Monitor audit log copied to output directory\n"
+      fi
+
+      # Дублируем в collected (чтобы точно попал в архив)
+      if [ -d "${__UAC_ARTIFACTS_OUTPUT_DIR}" ]; then
+          cp "/tmp/uac_security_monitor_audit.log" \
+             "${__UAC_ARTIFACTS_OUTPUT_DIR}/uac_security_monitor_audit.log" 2>/dev/null || true
+      fi
+  fi
+
   cd "${__UAC_ARTIFACTS_OUTPUT_DIR}" || _exit_fatal "cd: ${__UAC_DIR}: No such file or directory"
 
   # === SECURITY MONITOR: копирование audit-лога ===
   if [ -f "/tmp/uac_security_monitor_audit.log" ]; then
     cp "/tmp/uac_security_monitor_audit.log" "${__UAC_TEMP_DATA_DIR}/" 2>/dev/null || true
-    _log_message "INFO" "Security Monitor audit log copied to output directory"
   fi
 
   # add files to the beginning of the archive file
@@ -883,5 +932,8 @@ if [ -n "${__UAC_AZURE_STORAGE_SAS_URL}" ]; then
 fi
 
 ${__UAC_TRACE_MODE} && set +x
+trap '_sm_cleanup' EXIT
 
 exit 0
+
+
