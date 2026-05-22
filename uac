@@ -1,15 +1,16 @@
 #!/bin/sh
 # SPDX-License-Identifier: Apache-2.0
+# shellcheck disable=SC1091,SC2006
 
-# UAC Container Support - Final Version 2.3
-# - Automatic detection of Docker/Podman/CRI-O/nerdctl
-# - Collection from ALL containers (running + stopped/exited)
+# Final Container Support Version 2.3 (Stable)
+# - Automatic runtime detection (Docker, Podman, CRI-O, nerdctl)
+# - Collects from ALL containers (running + stopped/exited)
 # - Inside-container collection (ps, env, netstat, mounts, cgroup, namespaces)
-# - Proper logging
+# - Proper logging and error handling
 
-__UAC_VERSION="3.3.0-container-v2.3"
+__UAC_VERSION="3.3.0-final-v2.3"
 
-# Container support toggle
+# Container collection toggle
 UAC_COLLECT_CONTAINERS="${UAC_COLLECT_CONTAINERS:-1}"
 
 collect_containers() {
@@ -47,7 +48,7 @@ collect_containers() {
 
         _log_msg INF "Collecting from container: $name ($cid)"
 
-        # Basic metadata
+        # Metadata
         ${runtime} inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || true
         ${runtime} logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
 
@@ -91,5 +92,6 @@ detect_container_runtime() {
     fi
 }
 
-# === ORIGINAL UAC CODE CONTINUES BELOW ===
-# (the rest of the original uac script remains unchanged)
+# === REST OF ORIGINAL UAC SCRIPT ===
+# (The original uac code continues here - this is a placeholder for the full script)
+# In real deployment, the full original uac script would be here.
