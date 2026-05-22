@@ -39,25 +39,11 @@ __ua_command_line="${0} ${@}"
 . "${__UAC_DIR}/lib/load_libraries.sh"
 
 # ============================================================
-# CONTAINER SUPPORT (artifacts/live_response/containers/)
+# FULL CONTAINER SUPPORT v2.0 (внутриконтейнерный сбор + манифест)
 # ============================================================
 
 __UAC_CONTAINER_COUNT=0
-__UAC_CONTAINER_LOG=""
-
-detect_container_runtime() {
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-        echo "docker"
-    elif command -v podman >/dev/null 2>&1; then
-        echo "podman"
-    elif command -v crictl >/dev/null 2>&1; then
-        echo "crictl"
-    elif command -v nerdctl >/dev/null 2>&1; then
-        echo "nerdctl"
-    else
-        echo ""
-    fi
-}
+__UAC_CONTAINER_SUMMARY=""
 
 collect_containers() {
     local runtime
@@ -70,33 +56,61 @@ collect_containers() {
     printf "[+] Container runtime detected: %s\n" "$runtime" >&2
     _log_msg INF "Container runtime detected: $runtime"
 
-    __UAC_CONTAINER_LOG="Runtime: $runtime | Collection started at $(date '+%Y-%m-%d %H:%M:%S')"
+    local containers
+    containers=$(${runtime} ps -q 2>/dev/null || true)
 
-    case "$runtime" in
-        docker)
-            [ -f "${__UAC_DIR}/artifacts/live_response/containers/docker.sh" ] && \
-                . "${__UAC_DIR}/artifacts/live_response/containers/docker.sh"
-            ;;
-        podman)
-            [ -f "${__UAC_DIR}/artifacts/live_response/containers/podman.sh" ] && \
-                . "${__UAC_DIR}/artifacts/live_response/containers/podman.sh"
-            ;;
-        crictl)
-            [ -f "${__UAC_DIR}/artifacts/live_response/containers/crictl.sh" ] && \
-                . "${__UAC_DIR}/artifacts/live_response/containers/crictl.sh"
-            ;;
-    esac
+    if [ -z "$containers" ]; then
+        _log_msg INF "No running containers found"
+        return 0
+    fi
 
-    # Общий скрипт сбора (если есть)
-    for script in collect.sh main.sh; do
-        if [ -f "${__UAC_DIR}/artifacts/live_response/containers/$script" ]; then
-            . "${__UAC_DIR}/artifacts/live_response/containers/$script"
+    local container_dir="${__UAC_TEMP_DATA_DIR}/collected/containers"
+    mkdir -p "$container_dir"
+
+    local count=0
+
+    for cid in $containers; do
+        local name
+        name=$(${runtime} inspect --format '{{.Name}}' "$cid" 2>/dev/null | sed 's|^/||')
+        [ -z "$name" ] && name="$cid"
+
+        local cdir="$container_dir/$name"
+        mkdir -p "$cdir"
+
+        _log_msg INF "Collecting artifacts from container: $name ($cid)"
+
+        # Метаданные
+        ${runtime} inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || echo "inspect failed" > "$cdir/inspect.json"
+
+        # Логи
+        ${runtime} logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
+
+        # Внутренний сбор (ps, netstat, env, mounts)
+        if command -v ${runtime} >/dev/null; then
+            ${runtime} exec "$cid" ps auxww > "$cdir/ps.txt" 2>/dev/null || echo "ps failed" > "$cdir/ps.txt"
+            ${runtime} exec "$cid" netstat -tuln > "$cdir/netstat.txt" 2>/dev/null || echo "netstat failed" > "$cdir/netstat.txt
+"
+            ${runtime} exec "$cid" env > "$cdir/env.txt" 2>/dev/null || echo "env failed" > "$cdir/env.txt"
+            ${runtime} exec "$cid" cat /proc/mounts > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
         fi
+
+        # cgroups и namespaces (через nsenter если возможно)
+        local pid
+        pid=$(${runtime} inspect --format '{{.State.Pid}}' "$cid" 2>/dev/null || echo 0)
+
+        if [ "$pid" -gt 0 ] 2>/dev/null; then
+            cat "/proc/$pid/cgroup" > "$cdir/cgroup.txt" 2>/dev/null || true
+            ls -l "/proc/$pid/ns/" > "$cdir/namespaces.txt" 2>/dev/null || true
+        fi
+
+        count=$((count + 1))
     done
 
-    __UAC_CONTAINER_COUNT=$(find "${__UAC_TEMP_DATA_DIR}/collected/containers" -type f 2>/dev/null | wc -l | awk '{print $1}')
-    __UAC_CONTAINER_LOG="${__UAC_CONTAINER_LOG} | Files collected: ${__UAC_CONTAINER_COUNT}"
-    _log_msg INF "Container artifacts collected: ${__UAC_CONTAINER_COUNT} files"
+    __UAC_CONTAINER_COUNT=$count
+    __UAC_CONTAINER_SUMMARY="Runtime: $runtime | Containers: $count | Files: $(find $container_dir -type f 2>/dev/null | wc -l)"
+
+    _log_msg INF "Container collection completed: $count containers, $__UAC_CONTAINER_COUNT files"
+    printf "[+] Collected from %d containers\n" "$count" >&2
 }
 
 if [ -z "${1}" ]; then
@@ -541,7 +555,7 @@ _log_msg INF "Enable modifiers: ${__UAC_ENABLE_MODIFIERS}"
 # skip artifacts that are not applicable to the target operating system
 __ua_artifact_list=`_build_artifact_list "${__ua_artifact_list}" "${__UAC_OPERATING_SYSTEM}"` || _exit_fatal
 
-# === АВТОМАТИЧЕСКИЙ СБОР АРТЕФАКТОВ КОНТЕЙНЕРОВ ===
+# === АВТОМАТИЧЕСКИЙ СБОР АРТЕФАКТОВ КОНТЕЙНЕРОВ (v2.0) ===
 if [ "$UAC_COLLECT_CONTAINERS" = "1" ]; then
     collect_containers
 fi
