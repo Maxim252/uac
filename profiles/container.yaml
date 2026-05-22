@@ -1,0 +1,25 @@
+name: container
+version: "1.0"
+description: "Автоматический сбор артефактов из контейнерных сред (Docker, Podman, Kubernetes)"
+author: "Мосейчук М.Л."
+
+artifacts:
+  - type: command
+    command: "docker ps -a --format json || podman ps -a --format json || crictl ps -a --output json"
+    output_file: "containers/runtime_ps.json"
+
+  - type: command
+    command: "docker info || podman info || crictl info"
+    output_file: "containers/runtime_info.txt"
+
+  - type: directory
+    path: "/var/lib/docker/containers"
+    output_file: "containers/docker_containers"
+
+  - type: directory
+    path: "/var/lib/containers/storage"
+    output_file: "containers/podman_storage"
+
+  - type: command
+    command: "lsns | grep -E 'docker|containerd|podman'"
+    output_file: "containers/namespaces.txt"
