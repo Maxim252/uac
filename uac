@@ -20,6 +20,9 @@ __UAC_VERSION="3.3.0"
 # get UAC working dir
 __UAC_DIR=`pwd`
 
+# Container support variable
+UAC_COLLECT_CONTAINERS="${UAC_COLLECT_CONTAINERS:-1}"
+
 # check whether UAC is being executed from untarred directory
 if [ ! -d "${__UAC_DIR}/artifacts" ] || [ ! -d "${__UAC_DIR}/bin" ] \
   || [ ! -d "${__UAC_DIR}/config" ] || [ ! -d "${__UAC_DIR}/lib" ] \
@@ -35,6 +38,58 @@ __ua_command_line="${0} ${@}"
 # load lib files
 . "${__UAC_DIR}/lib/load_libraries.sh"
 
+# ============================================================
+# CONTAINER SUPPORT (artifacts/live_response/containers/)
+# ============================================================
+
+detect_container_runtime() {
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        echo "docker"
+    elif command -v podman >/dev/null 2>&1; then
+        echo "podman"
+    elif command -v crictl >/dev/null 2>&1; then
+        echo "crictl"
+    elif command -v nerdctl >/dev/null 2>&1; then
+        echo "nerdctl"
+    else
+        echo ""
+    fi
+}
+
+collect_containers() {
+    local runtime
+    runtime=$(detect_container_runtime)
+
+    if [ -z "$runtime" ]; then
+        return 0
+    fi
+
+    printf "[+] Container runtime detected: %s\n" "$runtime" >&2
+    _log_msg INF "Container runtime detected: $runtime"
+
+    case "$runtime" in
+        docker)
+            [ -f "${__UAC_DIR}/artifacts/live_response/containers/docker.sh" ] && \
+                . "${__UAC_DIR}/artifacts/live_response/containers/docker.sh"
+            ;;
+        podman)
+            [ -f "${__UAC_DIR}/artifacts/live_response/containers/podman.sh" ] && \
+                . "${__UAC_DIR}/artifacts/live_response/containers/podman.sh"
+            ;;
+        crictl)
+            [ -f "${__UAC_DIR}/artifacts/live_response/containers/crictl.sh" ] && \
+                . "${__UAC_DIR}/artifacts/live_response/containers/crictl.sh"
+            ;;
+    esac
+
+    # Общий скрипт сбора (если есть)
+    for script in collect.sh main.sh; do
+        if [ -f "${__UAC_DIR}/artifacts/live_response/containers/$script" ]; then
+            . "${__UAC_DIR}/artifacts/live_response/containers/$script"
+        fi
+    done
+}
+
 if [ -z "${1}" ]; then
   _usage
   _exit_fatal
@@ -43,7 +98,8 @@ fi
 __ua_path="/usr/xpg4/bin:/usr/xpg6/bin:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin"
 __ua_path="${__ua_path}:/usr/local/sbin:/usr/ucb:/usr/ccs/bin:/opt/bin:/opt/sbin"
 __ua_path="${__ua_path}:/opt/local/bin:/snap/bin:/netscaler:/opt/homebrew/bin"
-__ua_path="${__ua_path}:/opt/vyatta/bin"
+__ua_path="${__ua_path}:/opt/vyatta/bin
+" 
 
 PATH="${__ua_path}:${PATH}"
 export PATH
@@ -477,6 +533,12 @@ _log_msg INF "Enable modifiers: ${__UAC_ENABLE_MODIFIERS}"
 # skip artifacts that are not applicable to the target operating system
 __ua_artifact_list=`_build_artifact_list "${__ua_artifact_list}" "${__UAC_OPERATING_SYSTEM}"` || _exit_fatal
 
+# === АВТОМАТИЧЕСКИЙ СБОР АРТЕФАКТОВ КОНТЕЙНЕРОВ ===
+if [ "$UAC_COLLECT_CONTAINERS" = "1" ]; then
+    collect_containers
+fi
+# ==================================================
+
 # acquisition start date
 __ua_acquisition_start_date=`date "+%a %b %d %H:%M:%S %Y %z"`
 __ua_acquisition_start_date_epoch=`_get_epoch_date`
@@ -564,7 +626,6 @@ if [ "${__UAC_OUTPUT_FORMAT}" = "none" ] || ${__UAC_HASH_COLLECTED} || ${__UAC_T
       "hash" \
       "${__UAC_TEMP_DATA_DIR}/pre_output.tmp" \
       true \
-      "" \
       "" \
       "" \
       "" \
