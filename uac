@@ -42,6 +42,9 @@ __ua_command_line="${0} ${@}"
 # CONTAINER SUPPORT (artifacts/live_response/containers/)
 # ============================================================
 
+__UAC_CONTAINER_COUNT=0
+__UAC_CONTAINER_LOG=""
+
 detect_container_runtime() {
     if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
         echo "docker"
@@ -67,6 +70,8 @@ collect_containers() {
     printf "[+] Container runtime detected: %s\n" "$runtime" >&2
     _log_msg INF "Container runtime detected: $runtime"
 
+    __UAC_CONTAINER_LOG="Runtime: $runtime | Collection started at $(date '+%Y-%m-%d %H:%M:%S')"
+
     case "$runtime" in
         docker)
             [ -f "${__UAC_DIR}/artifacts/live_response/containers/docker.sh" ] && \
@@ -88,6 +93,10 @@ collect_containers() {
             . "${__UAC_DIR}/artifacts/live_response/containers/$script"
         fi
     done
+
+    __UAC_CONTAINER_COUNT=$(find "${__UAC_TEMP_DATA_DIR}/collected/containers" -type f 2>/dev/null | wc -l | awk '{print $1}')
+    __UAC_CONTAINER_LOG="${__UAC_CONTAINER_LOG} | Files collected: ${__UAC_CONTAINER_COUNT}"
+    _log_msg INF "Container artifacts collected: ${__UAC_CONTAINER_COUNT} files"
 }
 
 if [ -z "${1}" ]; then
@@ -98,8 +107,7 @@ fi
 __ua_path="/usr/xpg4/bin:/usr/xpg6/bin:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin"
 __ua_path="${__ua_path}:/usr/local/sbin:/usr/ucb:/usr/ccs/bin:/opt/bin:/opt/sbin"
 __ua_path="${__ua_path}:/opt/local/bin:/snap/bin:/netscaler:/opt/homebrew/bin"
-__ua_path="${__ua_path}:/opt/vyatta/bin
-" 
+__ua_path="${__ua_path}:/opt/vyatta/bin"
 
 PATH="${__ua_path}:${PATH}"
 export PATH
