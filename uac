@@ -39,7 +39,7 @@ __ua_command_line="${0} ${@}"
 . "${__UAC_DIR}/lib/load_libraries.sh"
 
 # ============================================================
-# FULL CONTAINER SUPPORT v2.0 (внутриконтейнерный сбор + манифест)
+# FULL CONTAINER SUPPORT v2.1 (автоматический + внутриконтейнерный сбор)
 # ============================================================
 
 __UAC_CONTAINER_COUNT=0
@@ -77,24 +77,21 @@ collect_containers() {
         local cdir="$container_dir/$name"
         mkdir -p "$cdir"
 
-        _log_msg INF "Collecting artifacts from container: $name ($cid)"
+        _log_msg INF "Collecting from container: $name ($cid)"
 
         # Метаданные
-        ${runtime} inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || echo "inspect failed" > "$cdir/inspect.json"
-
-        # Логи
+        ${runtime} inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || true
         ${runtime} logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
 
-        # Внутренний сбор (ps, netstat, env, mounts)
+        # ВНУТРИКОНТЕЙНЕРНЫЙ СБОР (ps, env, netstat)
         if command -v ${runtime} >/dev/null; then
             ${runtime} exec "$cid" ps auxww > "$cdir/ps.txt" 2>/dev/null || echo "ps failed" > "$cdir/ps.txt"
-            ${runtime} exec "$cid" netstat -tuln > "$cdir/netstat.txt" 2>/dev/null || echo "netstat failed" > "$cdir/netstat.txt
-"
             ${runtime} exec "$cid" env > "$cdir/env.txt" 2>/dev/null || echo "env failed" > "$cdir/env.txt"
+            ${runtime} exec "$cid" netstat -tuln > "$cdir/netstat.txt" 2>/dev/null || echo "netstat failed" > "$cdir/netstat.txt"
             ${runtime} exec "$cid" cat /proc/mounts > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
         fi
 
-        # cgroups и namespaces (через nsenter если возможно)
+        # cgroups и namespaces
         local pid
         pid=$(${runtime} inspect --format '{{.State.Pid}}' "$cid" 2>/dev/null || echo 0)
 
@@ -107,10 +104,23 @@ collect_containers() {
     done
 
     __UAC_CONTAINER_COUNT=$count
-    __UAC_CONTAINER_SUMMARY="Runtime: $runtime | Containers: $count | Files: $(find $container_dir -type f 2>/dev/null | wc -l)"
-
-    _log_msg INF "Container collection completed: $count containers, $__UAC_CONTAINER_COUNT files"
+    __UAC_CONTAINER_SUMMARY="Runtime: $runtime | Containers: $count"
+    _log_msg INF "Container collection completed: $count containers"
     printf "[+] Collected from %d containers\n" "$count" >&2
+}
+
+detect_container_runtime() {
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        echo "docker"
+    elif command -v podman >/dev/null 2>&1; then
+        echo "podman"
+    elif command -v crictl >/dev/null 2>&1; then
+        echo "crictl"
+    elif command -v nerdctl >/dev/null 2>&1; then
+        echo "nerdctl"
+    else
+        echo ""
+    fi
 }
 
 if [ -z "${1}" ]; then
@@ -555,7 +565,7 @@ _log_msg INF "Enable modifiers: ${__UAC_ENABLE_MODIFIERS}"
 # skip artifacts that are not applicable to the target operating system
 __ua_artifact_list=`_build_artifact_list "${__ua_artifact_list}" "${__UAC_OPERATING_SYSTEM}"` || _exit_fatal
 
-# === АВТОМАТИЧЕСКИЙ СБОР АРТЕФАКТОВ КОНТЕЙНЕРОВ (v2.0) ===
+# === АВТОМАТИЧЕСКИЙ СБОР АРТЕФАКТОВ КОНТЕЙНЕРОВ (v2.1) ===
 if [ "$UAC_COLLECT_CONTAINERS" = "1" ]; then
     collect_containers
 fi
@@ -648,6 +658,8 @@ if [ "${__UAC_OUTPUT_FORMAT}" = "none" ] || ${__UAC_HASH_COLLECTED} || ${__UAC_T
       "hash" \
       "${__UAC_TEMP_DATA_DIR}/pre_output.tmp" \
       true \
+      "" \
+      "" \
       "" \
       "" \
       "" \
