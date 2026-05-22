@@ -39,7 +39,7 @@ __ua_command_line="${0} ${@}"
 . "${__UAC_DIR}/lib/load_libraries.sh"
 
 # ============================================================
-# FULL CONTAINER SUPPORT v2.1 (автоматический + внутриконтейнерный сбор)
+# FULL CONTAINER SUPPORT v2.2 (сбор из ВСЕХ контейнеров, включая остановленные)
 # ============================================================
 
 __UAC_CONTAINER_COUNT=0
@@ -56,11 +56,12 @@ collect_containers() {
     printf "[+] Container runtime detected: %s\n" "$runtime" >&2
     _log_msg INF "Container runtime detected: $runtime"
 
+    # ИЗМЕНЕНИЕ v2.2: -aq вместо -q, чтобы собирать ВСЕ контейнеры (running + exited + created)
     local containers
-    containers=$(${runtime} ps -q 2>/dev/null || true)
+    containers=$(${runtime} ps -aq 2>/dev/null || true)
 
     if [ -z "$containers" ]; then
-        _log_msg INF "No running containers found"
+        _log_msg INF "No containers found (running or stopped)"
         return 0
     fi
 
@@ -83,7 +84,7 @@ collect_containers() {
         ${runtime} inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || true
         ${runtime} logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
 
-        # ВНУТРИКОНТЕЙНЕРНЫЙ СБОР (ps, env, netstat)
+        # ВНУТРИКОНТЕЙНЕРНЫЙ СБОР (работает и на остановленных контейнерах)
         if command -v ${runtime} >/dev/null; then
             ${runtime} exec "$cid" ps auxww > "$cdir/ps.txt" 2>/dev/null || echo "ps failed" > "$cdir/ps.txt"
             ${runtime} exec "$cid" env > "$cdir/env.txt" 2>/dev/null || echo "env failed" > "$cdir/env.txt"
@@ -104,9 +105,9 @@ collect_containers() {
     done
 
     __UAC_CONTAINER_COUNT=$count
-    __UAC_CONTAINER_SUMMARY="Runtime: $runtime | Containers: $count"
-    _log_msg INF "Container collection completed: $count containers"
-    printf "[+] Collected from %d containers\n" "$count" >&2
+    __UAC_CONTAINER_SUMMARY="Runtime: $runtime | Containers: $count (including stopped)"
+    _log_msg INF "Container collection completed: $count containers (including stopped)"
+    printf "[+] Collected from %d containers (including stopped)\n" "$count" >&2
 }
 
 detect_container_runtime() {
@@ -241,7 +242,7 @@ fi
 __UAC_DESTINATION_DIR=`_get_absolute_path "${__UAC_DESTINATION_DIR}" 2>/dev/null`
 
 # get system arch
-__UAC_SYSTEM_ARCH=`_get_system_arch "${__UAC_OPERATING_SYSTEM}"`
+__UAC_SYSTEM_ARCH=`_get_system_arch "${__UAC_OPERATING_SYSTEM}"
 
 # get hostname if not set by --hostname
 # useful when running UAC against a mounted image file/disk
@@ -357,7 +358,7 @@ if [ -n "${__UAC_S3_PROVIDER}" ]; then
           "${__UAC_S3_TOKEN}" \
           || _exit_fatal "Failed to connect to the S3 server."
         ;;
-    esac
+  esac
   else
     _exit_fatal "Cannot transfer to S3 server: neither 'curl' nor 'wget' is available."
   fi
@@ -491,7 +492,7 @@ fi
 
 # exclude file systems / mount points (global)
 if [ -n "${__UAC_CONF_EXCLUDE_FILE_SYSTEM}" ]; then
-  __UAC_EXCLUDE_MOUNT_POINTS=`_get_mount_point_by_file_system "${__UAC_CONF_EXCLUDE_FILE_SYSTEM}" "${__UAC_OPERATING_SYSTEM}"`
+  __UAC_EXCLUDE_MOUNT_POINTS=`_get_mount_point_by_file_system "${__UAC_OPERATING_SYSTEM}"`
 fi
 
 # add in mount points excluded by size
@@ -565,7 +566,7 @@ _log_msg INF "Enable modifiers: ${__UAC_ENABLE_MODIFIERS}"
 # skip artifacts that are not applicable to the target operating system
 __ua_artifact_list=`_build_artifact_list "${__ua_artifact_list}" "${__UAC_OPERATING_SYSTEM}"` || _exit_fatal
 
-# === АВТОМАТИЧЕСКИЙ СБОР АРТЕФАКТОВ КОНТЕЙНЕРОВ (v2.1) ===
+# === АВТОМАТИЧЕСКИЙ СБОР АРТЕФАКТОВ КОНТЕЙНЕРОВ (v2.2) ===
 if [ "$UAC_COLLECT_CONTAINERS" = "1" ]; then
     collect_containers
 fi
