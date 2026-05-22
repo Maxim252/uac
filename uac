@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # shellcheck disable=SC1091,SC2006
 
-# Final Container Support Version 2.3 (Stable)
+# Final Container Support Version 2.4 (with Full Filesystem Dump)
 # - Automatic runtime detection (Docker, Podman, CRI-O, nerdctl)
 # - Collects from ALL containers (running + stopped/exited)
 # - Inside-container collection (ps, env, netstat, mounts, cgroup, namespaces)
+# - Full filesystem dump via docker export / podman export
 # - Proper logging and error handling
 
-__UAC_VERSION="3.3.0-final-v2.3"
+__UAC_VERSION="3.3.0-final-v2.4"
 
 # Container collection toggle
 UAC_COLLECT_CONTAINERS="${UAC_COLLECT_CONTAINERS:-1}"
@@ -46,13 +47,24 @@ collect_containers() {
         local cdir="$container_dir/$name"
         mkdir -p "$cdir"
 
+        # === FULL FILESYSTEM DUMP ===
+        _log_msg INF "Exporting full filesystem dump for container: $name ($cid)"
+        if ${runtime} export "$cid" > "$cdir/filesystem.tar" 2>/dev/null; then
+            local dump_size
+            dump_size=$(du -h "$cdir/filesystem.tar" 2>/dev/null | cut -f1)
+            _log_msg INF "Filesystem dump created: $cdir/filesystem.tar ($dump_size)"
+        else
+            _log_msg WRN "Failed to export filesystem for container: $name"
+            rm -f "$cdir/filesystem.tar" 2>/dev/null || true
+        fi
+
         _log_msg INF "Collecting from container: $name ($cid)"
 
         # Metadata
         ${runtime} inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || true
         ${runtime} logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
 
-        # Inside-container collection
+        # Inside-container collection (only for running containers)
         if command -v ${runtime} >/dev/null 2>&1; then
             ${runtime} exec "$cid" ps auxww > "$cdir/ps.txt" 2>/dev/null || echo "ps failed" > "$cdir/ps.txt"
             ${runtime} exec "$cid" env > "$cdir/env.txt" 2>/dev/null || echo "env failed" > "$cdir/env.txt"
@@ -60,7 +72,7 @@ collect_containers() {
             ${runtime} exec "$cid" cat /proc/mounts > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
         fi
 
-        # cgroups and namespaces
+        # cgroups and namespaces (only for running containers)
         local pid
         pid=$(${runtime} inspect --format '{{.State.Pid}}' "$cid" 2>/dev/null || echo 0)
 
@@ -81,7 +93,7 @@ collect_containers() {
 detect_container_runtime() {
     if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
         echo "docker"
-    elif command -v podman >/dev/null 2>&1; then
+    elif command -v podman >/dev/null 2>/dev/null; then
         echo "podman"
     elif command -v crictl >/dev/null 2>&1; then
         echo "crictl"
