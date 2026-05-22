@@ -3,7 +3,7 @@
 # shellcheck disable=SC1091,SC2006
 
 # ================================================
-# UAC Container Forensic Module v2.6 (FINAL)
+# UAC Container Forensic Module v2.7 (STABLE FINAL)
 # Fully implements sections 3.4.3 and 3.5 of VKR
 # - All containers (running + stopped)
 # - Full filesystem dump + Volumes + Bind Mounts
@@ -12,10 +12,10 @@
 # - Docker layer analysis
 # - containerd/dockerd logs
 # - Timeline reconstruction
-# - Graceful error handling
+# - Fixed container profile
 # ================================================
 
-__UAC_VERSION="3.3.0-final-v2.6"
+__UAC_VERSION="3.3.0-final-v2.7"
 
 UAC_COLLECT_CONTAINERS="${UAC_COLLECT_CONTAINERS:-1}"
 
