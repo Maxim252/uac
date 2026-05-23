@@ -1,0 +1,11 @@
+итого 0
+lrwxrwxrwx 1 maks maks 0 мая 23 13:51 cgroup -> cgroup:[4026533255]
+lrwxrwxrwx 1 maks maks 0 мая 23 13:51 ipc -> ipc:[4026533116]
+lrwxrwxrwx 1 maks maks 0 мая 23 13:51 mnt -> mnt:[4026533113]
+lrwxrwxrwx 1 maks maks 0 мая 23 12:15 net -> net:[4026533120]
+lrwxrwxrwx 1 maks maks 0 мая 23 13:51 pid -> pid:[4026533117]
+lrwxrwxrwx 1 maks maks 0 мая 23 13:51 pid_for_children -> pid:[4026533117]
+lrwxrwxrwx 1 maks maks 0 мая 23 13:51 time -> time:[4026531834]
+lrwxrwxrwx 1 maks maks 0 мая 23 13:51 time_for_children -> time:[4026531834]
+lrwxrwxrwx 1 maks maks 0 мая 23 13:51 user -> user:[4026531837]
+lrwxrwxrwx 1 maks maks 0 мая 23 13:51 uts -> uts:[4026533115]

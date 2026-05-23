@@ -1,6 +1,5 @@
 name: container
-description: "Полный сбор артефактов из контейнерных сред (Docker, Podman, Kubernetes) - v2.7 Final"
-author: "UAC Forensic Team"
-version: "2.7"
+description: "Автоматический сбор артефактов из контейнерных сред (Docker, Podman, Kubernetes)"
 artifacts:
-  - live_response/containers/docker.yaml
+  - live_response/containers/*
+

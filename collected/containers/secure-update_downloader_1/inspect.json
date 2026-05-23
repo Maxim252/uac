@@ -1,0 +1,222 @@
+[
+    {
+        "Id": "454f1875c1fdd582dc7ae011cc98bbd052b6ad30dc54cd7812db1ca2eaaad7a5",
+        "Created": "2025-04-23T03:22:17.971004423Z",
+        "Path": "python",
+        "Args": [
+            "downloader.py",
+            "config.ini"
+        ],
+        "State": {
+            "Status": "exited",
+            "Running": false,
+            "Paused": false,
+            "Restarting": false,
+            "OOMKilled": false,
+            "Dead": false,
+            "Pid": 0,
+            "ExitCode": 137,
+            "Error": "",
+            "StartedAt": "2025-05-30T09:34:17.357970625Z",
+            "FinishedAt": "2025-05-30T09:57:38.212200694Z"
+        },
+        "Image": "sha256:f4e7bb3ce4da2c38e0f4441afb8ad39b47b953eec23ed429f6fe34fd480bb011",
+        "ResolvConfPath": "/var/lib/docker/containers/454f1875c1fdd582dc7ae011cc98bbd052b6ad30dc54cd7812db1ca2eaaad7a5/resolv.conf",
+        "HostnamePath": "/var/lib/docker/containers/454f1875c1fdd582dc7ae011cc98bbd052b6ad30dc54cd7812db1ca2eaaad7a5/hostname",
+        "HostsPath": "/var/lib/docker/containers/454f1875c1fdd582dc7ae011cc98bbd052b6ad30dc54cd7812db1ca2eaaad7a5/hosts",
+        "LogPath": "/var/lib/docker/containers/454f1875c1fdd582dc7ae011cc98bbd052b6ad30dc54cd7812db1ca2eaaad7a5/454f1875c1fdd582dc7ae011cc98bbd052b6ad30dc54cd7812db1ca2eaaad7a5-json.log",
+        "Name": "/secure-update_downloader_1",
+        "RestartCount": 0,
+        "Driver": "overlay2",
+        "Platform": "linux",
+        "MountLabel": "",
+        "ProcessLabel": "",
+        "AppArmorProfile": "docker-default",
+        "ExecIDs": null,
+        "HostConfig": {
+            "Binds": [],
+            "ContainerIDFile": "",
+            "LogConfig": {
+                "Type": "json-file",
+                "Config": {}
+            },
+            "NetworkMode": "secure-update_default",
+            "PortBindings": {},
+            "RestartPolicy": {
+                "Name": "no",
+                "MaximumRetryCount": 0
+            },
+            "AutoRemove": false,
+            "VolumeDriver": "",
+            "VolumesFrom": [],
+            "ConsoleSize": [
+                0,
+                0
+            ],
+            "CapAdd": null,
+            "CapDrop": null,
+            "CgroupnsMode": "private",
+            "Dns": [],
+            "DnsOptions": [],
+            "DnsSearch": [],
+            "ExtraHosts": null,
+            "GroupAdd": null,
+            "IpcMode": "private",
+            "Cgroup": "",
+            "Links": null,
+            "OomScoreAdj": 0,
+            "PidMode": "",
+            "Privileged": false,
+            "PublishAllPorts": false,
+            "ReadonlyRootfs": false,
+            "SecurityOpt": null,
+            "UTSMode": "",
+            "UsernsMode": "",
+            "ShmSize": 67108864,
+            "Runtime": "runc",
+            "Isolation": "",
+            "CpuShares": 0,
+            "Memory": 0,
+            "NanoCpus": 0,
+            "CgroupParent": "",
+            "BlkioWeight": 0,
+            "BlkioWeightDevice": null,
+            "BlkioDeviceReadBps": null,
+            "BlkioDeviceWriteBps": null,
+            "BlkioDeviceReadIOps": null,
+            "BlkioDeviceWriteIOps": null,
+            "CpuPeriod": 0,
+            "CpuQuota": 0,
+            "CpuRealtimePeriod": 0,
+            "CpuRealtimeRuntime": 0,
+            "CpusetCpus": "",
+            "CpusetMems": "",
+            "Devices": null,
+            "DeviceCgroupRules": null,
+            "DeviceRequests": null,
+            "MemoryReservation": 0,
+            "MemorySwap": 0,
+            "MemorySwappiness": null,
+            "OomKillDisable": null,
+            "PidsLimit": null,
+            "Ulimits": null,
+            "CpuCount": 0,
+            "CpuPercent": 0,
+            "IOMaximumIOps": 0,
+            "IOMaximumBandwidth": 0,
+            "MaskedPaths": [
+                "/proc/asound",
+                "/proc/acpi",
+                "/proc/kcore",
+                "/proc/keys",
+                "/proc/latency_stats",
+                "/proc/timer_list",
+                "/proc/timer_stats",
+                "/proc/sched_debug",
+                "/proc/scsi",
+                "/sys/firmware",
+                "/sys/devices/virtual/powercap"
+            ],
+            "ReadonlyPaths": [
+                "/proc/bus",
+                "/proc/fs",
+                "/proc/irq",
+                "/proc/sys",
+                "/proc/sysrq-trigger"
+            ]
+        },
+        "GraphDriver": {
+            "Data": {
+                "LowerDir": "/var/lib/docker/overlay2/28d32e9d7264422602a57683a973f4785e7e7ed474b43bc0e83d8e304d6455c6-init/diff:/var/lib/docker/overlay2/43d0f0d5cea205b6ed45fc64073d35bc1dc1f51b64bcc920764062378f33aa99/diff:/var/lib/docker/overlay2/6745db6f63ce4338fd7a5a1b7bae60914e1f05ea16c2b7e8cbd437c94f851602/diff:/var/lib/docker/overlay2/a90697192522633f2cf3667fa69b9cfe6d27af7443494e4409caddb7bce0ab6c/diff:/var/lib/docker/overlay2/ff0d3d22b9b5a3b6236e2144dfb6a1f3c64a426ab71c8b170417f2fc63fe5fe7/diff:/var/lib/docker/overlay2/7ea59a1d692a40d3d980bff37d3c08c98391b3063d01221b03bbfb0b6afe54a3/diff:/var/lib/docker/overlay2/55f3e5da3c5a03c274e080b63501f35ce96df7a0c82aeca7d4d2f9ab4bf93ebd/diff:/var/lib/docker/overlay2/a6f302d0dba7eaf3e95aa24c924db278c629fcd586308688ca71d53933aaf3e0/diff:/var/lib/docker/overlay2/ab2bd6c51219141189ff7323cf9966ec14f83188085f9e6d313f040738513fe5/diff:/var/lib/docker/overlay2/7b94ad8c6030b1f2c57be9608a37506ec0f0f4bc2cb7e77178cc31c642bbcb86/diff",
+                "MergedDir": "/var/lib/docker/overlay2/28d32e9d7264422602a57683a973f4785e7e7ed474b43bc0e83d8e304d6455c6/merged",
+                "UpperDir": "/var/lib/docker/overlay2/28d32e9d7264422602a57683a973f4785e7e7ed474b43bc0e83d8e304d6455c6/diff",
+                "WorkDir": "/var/lib/docker/overlay2/28d32e9d7264422602a57683a973f4785e7e7ed474b43bc0e83d8e304d6455c6/work"
+            },
+            "Name": "overlay2"
+        },
+        "Mounts": [],
+        "Config": {
+            "Hostname": "454f1875c1fd",
+            "Domainname": "",
+            "User": "appuser",
+            "AttachStdin": false,
+            "AttachStdout": false,
+            "AttachStderr": false,
+            "Tty": false,
+            "OpenStdin": false,
+            "StdinOnce": false,
+            "Env": [
+                "PATH=/usr/local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG=C.UTF-8",
+                "GPG_KEY=E3FF2839C048B25C084DEBE9B26995E310250568",
+                "PYTHON_VERSION=3.8.20",
+                "PYTHONDONTWRITEBYTECODE=1",
+                "PYTHONUNBUFFERED=1"
+            ],
+            "Cmd": [
+                "python",
+                "downloader.py",
+                "config.ini"
+            ],
+            "Image": "downloader",
+            "Volumes": null,
+            "WorkingDir": "/downloader",
+            "Entrypoint": null,
+            "OnBuild": null,
+            "Labels": {
+                "com.docker.compose.config-hash": "828365487413ebb263be327a8e7669e74c34ea92d8a1f8d768d6259af5bed4ee",
+                "com.docker.compose.container-number": "1",
+                "com.docker.compose.oneoff": "False",
+                "com.docker.compose.project": "secure-update",
+                "com.docker.compose.project.config_files": "docker-compose.yml",
+                "com.docker.compose.project.working_dir": "/home/maks/work/secure-update",
+                "com.docker.compose.service": "downloader",
+                "com.docker.compose.version": "1.29.2"
+            }
+        },
+        "NetworkSettings": {
+            "Bridge": "",
+            "SandboxID": "5427fa3bdfdcf2bb26db93074359fca26fd3973924ad9116b79cac1e73ba6552",
+            "SandboxKey": "/var/run/docker/netns/5427fa3bdfdc",
+            "Ports": {},
+            "HairpinMode": false,
+            "LinkLocalIPv6Address": "",
+            "LinkLocalIPv6PrefixLen": 0,
+            "SecondaryIPAddresses": null,
+            "SecondaryIPv6Addresses": null,
+            "EndpointID": "",
+            "Gateway": "",
+            "GlobalIPv6Address": "",
+            "GlobalIPv6PrefixLen": 0,
+            "IPAddress": "",
+            "IPPrefixLen": 0,
+            "IPv6Gateway": "",
+            "MacAddress": "",
+            "Networks": {
+                "secure-update_default": {
+                    "IPAMConfig": null,
+                    "Links": null,
+                    "Aliases": [
+                        "454f1875c1fd",
+                        "downloader"
+                    ],
+                    "MacAddress": "",
+                    "NetworkID": "0692f2c7bf89be7abdec062915769250205c30e0a8fc9fb4e2ea7c6eba96db58",
+                    "EndpointID": "",
+                    "Gateway": "",
+                    "IPAddress": "",
+                    "IPPrefixLen": 0,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+                    "DriverOpts": null,
+                    "DNSNames": [
+                        "secure-update_downloader_1",
+                        "454f1875c1fd",
+                        "downloader"
+                    ]
+                }
+            }
+        }
+    }
+]
