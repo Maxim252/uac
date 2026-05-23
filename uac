@@ -50,136 +50,140 @@ __UAC_CONTAINER_SUMMARY=""
         _log_msg WRN "nsenter not found - fallback will be limited"
     fi
 
+# ============================================================
+# collect_containers() v2.5 — финальная версия
+# Собирает из Docker + Podman + nerdctl + crictl (включая остановленные)
+# ============================================================
 collect_containers() {
-    local runtime
-    runtime=$(detect_container_runtime)
+    local runtimes="docker podman nerdctl crictl"
+    local forced_runtime="${UAC_CONTAINER_RUNTIME:-}"
 
-    if [ -z "$runtime" ]; then
-        return 0
+    if [ -n "$forced_runtime" ]; then
+        runtimes="$forced_runtime"
     fi
 
-    printf "[+] Container runtime detected: %s\n" "$runtime" >&2
-    _log_msg INF "Container runtime detected: $runtime"
+    local total_containers=0
+    local collected_runtimes=""
 
-    # ИЗМЕНЕНИЕ v2.2: -aq вместо -q, чтобы собирать ВСЕ контейнеры (running + exited + created)
-    local containers
-    containers=$(${runtime} ps -aq 2>/dev/null || true)
-
-    if [ -z "$containers" ]; then
-        _log_msg INF "No containers found (running or stopped)"
-        return 0
-    fi
-
-    local container_dir="${__UAC_TEMP_DATA_DIR}/collected/containers"
-    mkdir -p "$container_dir"
-
-    local count=0
-
-    for cid in $containers; do
-        local name
-        name=$(${runtime} inspect --format '{{.Name}}' "$cid" 2>/dev/null | sed 's|^/||')
-        [ -z "$name" ] && name="$cid"
-
-        local cdir="$container_dir/$name"
-        mkdir -p "$cdir"
-
-        _log_msg INF "Collecting from container: $name ($cid)"
-
-        # Метаданные
-                # === МЕТАДАННЫЕ + СНИМОК КОНТЕЙНЕРА (v2.3) ===
-        ${runtime} inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || true
-        ${runtime} logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
-
-        # === СНИМОК КОНТЕЙНЕРА ===
-        local snapshot_dir="$cdir/snapshot"
-        mkdir -p "$snapshot_dir"
-
-        # 1. Filesystem Export (работает всегда — даже на stopped/exited)
-        if ${runtime} export "$cid" > "$snapshot_dir/filesystem.tar" 2>/dev/null; then
-            echo "filesystem.tar" > "$snapshot_dir/snapshot_manifest.txt"
-        else
-            echo "export failed" > "$snapshot_dir/filesystem.tar"
+    for runtime in $runtimes; do
+        if ! command -v "$runtime" >/dev/null 2>&1; then
+            continue
         fi
 
-        # 2. Checkpoint (только для running контейнеров)
-        local state
-        state=$(${runtime} inspect --format '{{.State.Running}}' "$cid" 2>/dev/null || echo "false")
+        # Проверка, что рантайм реально работает (более надёжная, чем "info")
+        if ! "$runtime" ps -q >/dev/null 2>&1; then
+            continue
+        fi
 
-        if [ "$state" = "true" ]; then
-            local cp_name="uac_checkpoint_$(date +%s)"
-            if command -v timeout >/dev/null 2>&1; then
-                if timeout 15 ${runtime} checkpoint create --leave-running "$cid" "$cp_name" 2>/dev/null; then
-                    echo "checkpoint: $cp_name" >> "$snapshot_dir/snapshot_manifest.txt"
+        printf "[+] Container runtime detected: %s\n" "$runtime" >&2
+        _log_msg INF "Container runtime detected: $runtime"
+
+        local containers
+        containers=$("$runtime" ps -aq 2>/dev/null || true)
+
+        if [ -z "$containers" ]; then
+            continue
+        fi
+
+        local container_dir="${__UAC_TEMP_DATA_DIR}/collected/containers"
+        mkdir -p "$container_dir"
+
+        local count=0
+
+        for cid in $containers; do
+            local name
+            name=$("$runtime" inspect --format '{{.Name}}' "$cid" 2>/dev/null | sed 's|^/||')
+            [ -z "$name" ] && name="$cid"
+
+            local cdir="$container_dir/${runtime}_$name"
+            mkdir -p "$cdir"
+
+            _log_msg INF "Collecting from container ($runtime): $name ($cid)"
+
+            # === МЕТАДАННЫЕ ===
+            "$runtime" inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || true
+            "$runtime" logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
+
+            # === SNAPSHOT (работает даже на остановленных) ===
+            local snapshot_dir="$cdir/snapshot"
+            mkdir -p "$snapshot_dir"
+            "$runtime" export "$cid" > "$snapshot_dir/filesystem.tar" 2>/dev/null || true
+            echo "filesystem.tar" > "$snapshot_dir/snapshot_manifest.txt"
+
+            # === ВНУТРИКОНТЕЙНЕРНЫЙ СБОР ===
+            local state
+            state=$("$runtime" inspect --format '{{.State.Running}}' "$cid" 2>/dev/null || echo "false")
+
+            if [ "$state" = "true" ]; then
+                if command -v timeout >/dev/null 2>&1; then
+                    timeout 10 "$runtime" exec "$cid" sh -c "ps auxww"       > "$cdir/ps.txt"     2>/dev/null || echo "ps failed"     > "$cdir/ps.txt"
+                    timeout 5  "$runtime" exec "$cid" sh -c "env"            > "$cdir/env.txt"    2>/dev/null || echo "env failed"    > "$cdir/env.txt"
+                    timeout 5  "$runtime" exec "$cid" sh -c "netstat -tuln"  > "$cdir/netstat.txt" 2>/dev/null || echo "netstat failed" > "$cdir/netstat.txt"
+                    timeout 5  "$runtime" exec "$cid" sh -c "cat /proc/mounts" > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
                 else
-                    echo "checkpoint failed or not supported (timeout)" > "$snapshot_dir/checkpoint.log"
+                    "$runtime" exec "$cid" sh -c "ps auxww"       > "$cdir/ps.txt"     2>/dev/null || echo "ps failed"     > "$cdir/ps.txt"
+                    "$runtime" exec "$cid" sh -c "env"            > "$cdir/env.txt"    2>/dev/null || echo "env failed"    > "$cdir/env.txt"
+                    "$runtime" exec "$cid" sh -c "netstat -tuln"  > "$cdir/netstat.txt" 2>/dev/null || echo "netstat failed" > "$cdir/netstat.txt"
+                    "$runtime" exec "$cid" sh -c "cat /proc/mounts" > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
                 fi
             else
-                echo "checkpoint skipped (no timeout command)" > "$snapshot_dir/checkpoint.log"
+                echo "Container not running - inside collection skipped" > "$cdir/ps.txt"
+                echo "Container not running - inside collection skipped" > "$cdir/env.txt"
+                echo "Container not running - inside collection skipped" > "$cdir/netstat.txt"
+                echo "Container not running - inside collection skipped" > "$cdir/mounts.txt"
             fi
-        fi
 
-        # ВНУТРИКОНТЕЙНЕРНЫЙ СБОР (работает и на остановленных контейнерах)
-        # Собираем только у запущенных контейнеров + fallback на nsenter
-        state=$(${runtime} inspect --format '{{.State.Running}}' "$cid" 2>/dev/null || echo "false")
+            # === FALLBACK через nsenter ===
+            local pid
+            pid=$("$runtime" inspect --format '{{.State.Pid}}' "$cid" 2>/dev/null || echo 0)
 
-          if [ "$state" = "true" ]; then
-            if command -v timeout >/dev/null 2>&1; then
-                timeout 10 ${runtime} exec "$cid" sh -c "ps auxww" > "$cdir/ps.txt" 2>/dev/null || echo "ps failed" > "$cdir/ps.txt"
-                timeout 5  ${runtime} exec "$cid" sh -c "env"       > "$cdir/env.txt" 2>/dev/null || echo "env failed" > "$cdir/env.txt"
-                timeout 5  ${runtime} exec "$cid" sh -c "netstat -tuln" > "$cdir/netstat.txt" 2>/dev/null || echo "netstat failed" > "$cdir/netstat.txt"
-                timeout 5  ${runtime} exec "$cid" sh -c "cat /proc/mounts" > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
-            else
-                ${runtime} exec "$cid" sh -c "ps auxww" > "$cdir/ps.txt" 2>/dev/null || echo "ps failed" > "$cdir/ps.txt"
-                ${runtime} exec "$cid" sh -c "env"       > "$cdir/env.txt" 2>/dev/null || echo "env failed" > "$cdir/env.txt"
-                ${runtime} exec "$cid" sh -c "netstat -tuln" > "$cdir/netstat.txt" 2>/dev/null || echo "netstat failed" > "$cdir/netstat.txt"
-                ${runtime} exec "$cid" sh -c "cat /proc/mounts" > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
+            if [ "$pid" -gt 0 ] 2>/dev/null && { [ ! -s "$cdir/ps.txt" ] || grep -q "failed" "$cdir/ps.txt" 2>/dev/null; }; then
+                nsenter --target "$pid" --mount --uts --ipc --net --pid ps auxww > "$cdir/ps.txt" 2>/dev/null || true
+                nsenter --target "$pid" --mount env > "$cdir/env.txt" 2>/dev/null || true
+                nsenter --target "$pid" --net netstat -tuln > "$cdir/netstat.txt" 2>/dev/null || true
+                nsenter --target "$pid" --mount cat /proc/mounts > "$cdir/mounts.txt" 2>/dev/null || true
+                echo "Used nsenter fallback for PID $pid" >> "$cdir/collection.log"
             fi
-        else
-            echo "Container not running - inside collection skipped" > "$cdir/ps.txt"
-            echo "Container not running - inside collection skipped" > "$cdir/env.txt"
-            echo "Container not running - inside collection skipped" > "$cdir/netstat.txt"
-            echo "Container not running - inside collection skipped" > "$cdir/mounts.txt"
-        fi
 
-        # === FALLBACK через nsenter (если exec не сработал) ===
-        local pid
-        pid=$(${runtime} inspect --format '{{.State.Pid}}' "$cid" 2>/dev/null || echo 0)
+            # === CGROUPS и NAMESPACES ===
+            if [ "$pid" -gt 0 ] 2>/dev/null; then
+                cat "/proc/$pid/cgroup" > "$cdir/cgroup.txt" 2>/dev/null || true
+                ls -l "/proc/$pid/ns/" > "$cdir/namespaces.txt" 2>/dev/null || true
+            fi
 
-        if [ "$pid" -gt 0 ] 2>/dev/null && { [ ! -s "$cdir/ps.txt" ] || grep -q "failed" "$cdir/ps.txt" 2>/dev/null; }; then
-            nsenter --target "$pid" --mount --uts --ipc --net --pid ps auxww > "$cdir/ps.txt" 2>/dev/null || true
-            nsenter --target "$pid" --mount env > "$cdir/env.txt" 2>/dev/null || true
-            nsenter --target "$pid" --net netstat -tuln > "$cdir/netstat.txt" 2>/dev/null || true
-            nsenter --target "$pid" --mount cat /proc/mounts > "$cdir/mounts.txt" 2>/dev/null || true
-            echo "Used nsenter fallback for PID $pid" >> "$cdir/collection.log"
-        fi
+            count=$((count + 1))
+        done
 
-        # cgroups и namespaces
-        local pid
-        pid=$(${runtime} inspect --format '{{.State.Pid}}' "$cid" 2>/dev/null || echo 0)
-
-        if [ "$pid" -gt 0 ] 2>/dev/null; then
-            cat "/proc/$pid/cgroup" > "$cdir/cgroup.txt" 2>/dev/null || true
-            ls -l "/proc/$pid/ns/" > "$cdir/namespaces.txt" 2>/dev/null || true
-        fi
-
-        count=$((count + 1))
+        total_containers=$((total_containers + count))
+        collected_runtimes="$collected_runtimes $runtime"
+        _log_msg INF "Container collection completed for $runtime: $count containers"
     done
 
-    __UAC_CONTAINER_COUNT=$count
-    __UAC_CONTAINER_SUMMARY="Runtime: $runtime | Containers: $count (including stopped)"
-    _log_msg INF "Container collection completed: $count containers (including stopped)"
-    printf "[+] Collected from %d containers (including stopped)\n" "$count" >&2
+    __UAC_CONTAINER_COUNT=$total_containers
+
+    if [ "$total_containers" -gt 0 ]; then
+        __UAC_CONTAINER_SUMMARY="Runtimes:${collected_runtimes} | Total: $total_containers (including stopped)"
+        printf "[+] Collected from %d containers across multiple runtimes\n" "$total_containers" >&2
+    else
+        __UAC_CONTAINER_SUMMARY="No containers found"
+    fi
 }
 
 detect_container_runtime() {
+    # Приоритет: переменная окружения > автоопределение
+    if [ -n "$UAC_CONTAINER_RUNTIME" ]; then
+        echo "$UAC_CONTAINER_RUNTIME"
+        return 0
+    fi
+
     if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
         echo "docker"
-    elif command -v podman >/dev/null 2>&1; then
+    elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
         echo "podman"
-    elif command -v crictl >/dev/null 2>&1; then
-        echo "crictl"
     elif command -v nerdctl >/dev/null 2>&1; then
         echo "nerdctl"
+    elif command -v crictl >/dev/null 2>&1; then
+        echo "crictl"
     else
         echo ""
     fi
@@ -258,6 +262,17 @@ _parse_command_line_arguments "${@}" || _exit_fatal
 # do not allow using undefined variables
 # set -u cannot be set at the beginning of the script since it will fail on $@
 set -u
+
+check_criu() {
+    if ! command -v criu >/dev/null 2>&1; then
+        echo "[WARNING] CRIU не установлен. Checkpointing отключён." >&2
+        export COLLECT_CONTAINER_CHECKPOINT=0
+        return 1
+    fi
+    return 0
+}
+
+check_criu
 
 ${__UAC_TRACE_MODE} && set -x
 
@@ -651,7 +666,6 @@ if [ ! -s "${__UAC_TEMP_DATA_DIR}/artifact_list.tmp" ]; then
 else
   printf "%s\n" "Artifacts collection started..."
   _log_msg INF "Artifacts collection started..."
-
   # shellcheck disable=SC2162
   while read __ua_artifact || [ -n "${__ua_artifact}" ]; do
     __ua_artifact_without_uac_dir=`echo "${__ua_artifact}" | sed -e "s|^${__UAC_DIR}/artifacts/||"`
@@ -675,6 +689,11 @@ __ua_total_execution_time=`expr "${__ua_acquisition_end_date_epoch}" - "${__ua_a
 printf "%s\n" "--------------------------------------------------------------------------------"
 printf "Artifacts collection completed in %d seconds\n" "${__ua_total_execution_time}"
 _log_msg INF "Artifacts collection completed in ${__ua_total_execution_time} seconds"
+
+if [ -n "$__UAC_CONTAINER_SUMMARY" ] && [ "$__UAC_CONTAINER_COUNT" -gt 0 ]; then
+    printf "Container collection: %s\n" "$__UAC_CONTAINER_SUMMARY"
+    _log_msg INF "Container collection: $__UAC_CONTAINER_SUMMARY"
+fi
 
 # prepare output
 printf "Filtering non-regular files...\n"
