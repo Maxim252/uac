@@ -1,8 +1,11 @@
 #!/bin/sh
-# UAC Container Forensic Collector v2.8 (Clean Working Version)
-# All requirements from 3.4.3 and 3.5 implemented
+# ================================================
+# UAC Container Forensic Collector v2.9 (COMPLETE)
+# Fully self-contained - no placeholders
+# Implements all requirements from 3.4.3 and 3.5
+# ================================================
 
-__UAC_VERSION="2.8-final"
+__UAC_VERSION="2.9-complete"
 
 UAC_COLLECT_CONTAINERS="${UAC_COLLECT_CONTAINERS:-1}"
 
@@ -56,8 +59,7 @@ collect_containers() {
     mkdir -p "$container_dir"
 
     local count=0
-    local start_time=$(date '+%Y-%m-%d %H:%M:%S
-    
+    local start_time=$(date '+%Y-%m-%d %H:%M:%S')
 
     for cid in $containers; do
         local name
@@ -69,14 +71,10 @@ collect_containers() {
 
         echo "Processing container: $name ($cid)"
 
-        # Full filesystem dump
         ${runtime} export "$cid" > "$cdir/filesystem.tar" 2>/dev/null || true
-
-        # Metadata
         ${runtime} inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || true
         ${runtime} logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
 
-        # Inside-container artifacts
         if command -v ${runtime} >/dev/null 2>&1; then
             ${runtime} exec "$cid" ps auxww > "$cdir/ps.txt" 2>/dev/null || echo "ps failed" > "$cdir/ps.txt"
             ${runtime} exec "$cid" env > "$cdir/env.txt" 2>/dev/null || echo "env failed" > "$cdir/env.txt"
@@ -84,7 +82,6 @@ collect_containers() {
             ${runtime} exec "$cid" cat /proc/mounts > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
         fi
 
-        # cgroups + namespaces
         local pid
         pid=$(${runtime} inspect --format '{{.State.Pid}}' "$cid" 2>/dev/null || echo 0)
         if [ "$pid" -gt 0 ] 2>/dev/null; then
@@ -96,7 +93,6 @@ collect_containers() {
         collect_docker_layers "$runtime" "$cid" "$cdir"
         collect_system_logs "$runtime" "$cdir"
 
-        # SHA-256 hashes
         {
             echo "# SHA-256 Hashes - Container: $name ($cid)"
             echo "# Generated: $(date '+%Y-%m-%d %H:%M:%S')"
@@ -105,7 +101,6 @@ collect_containers() {
             done
         } > "$cdir/hashes.sha256"
 
-        # Timeline
         {
             echo "=== Timeline: $name ==="
             echo "Created:  $(jq -r '.Created' "$cdir/inspect.json" 2>/dev/null || echo 'N/A')"
@@ -118,7 +113,6 @@ collect_containers() {
 
     local end_time=$(date '+%Y-%m-%d %H:%M:%S')
 
-    # Chain of Custody
     {
         echo "=== CHAIN OF CUSTODY ==="
         echo "Tool:           UAC $__UAC_VERSION"
@@ -148,9 +142,9 @@ detect_container_runtime() {
     fi
 }
 
-# === MAIN ===
+# === MAIN ENTRY POINT ===
 if [ "$UAC_COLLECT_CONTAINERS" = "1" ]; then
     collect_containers
 fi
 
-echo "UAC Container Collector v$__UAC_VERSION ready"
+echo "UAC Container Forensic Collector v$__UAC_VERSION ready"
