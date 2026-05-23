@@ -1,4 +1,0 @@
-=== Timeline: secure-update_app_with_updater_1 ===
-Created:  N/A
-Started:  N/A
-Finished: N/A

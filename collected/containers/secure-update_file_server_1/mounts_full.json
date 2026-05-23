@@ -1,1 +1,0 @@
-[{"Type":"bind","Source":"/home/maks/work/secure-update/file_server/data","Destination":"/file_server/data","Mode":"rw","RW":true,"Propagation":"rprivate"}]

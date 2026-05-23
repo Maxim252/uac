@@ -1,4 +1,0 @@
-=== Timeline: secure-update_downloader_1 ===
-Created:  N/A
-Started:  N/A
-Finished: N/A
