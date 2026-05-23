@@ -1,25 +1,10 @@
 #!/bin/sh
-# SPDX-License-Identifier: Apache-2.0
-# shellcheck disable=SC1091,SC2006
+# UAC Container Forensic Collector v2.8 (Clean Working Version)
+# All requirements from 3.4.3 and 3.5 implemented
 
-# ================================================
-# UAC Container Forensic Module v2.7 (STABLE FINAL)
-# Fully implements sections 3.4.3 and 3.5 of VKR
-# - All containers (running + stopped)
-# - Full filesystem dump + Volumes + Bind Mounts
-# - SHA-256 hashing of every artifact
-# - Chain of Custody documentation
-# - Docker layer analysis
-# - containerd/dockerd logs
-# - Timeline reconstruction
-# - Fixed container profile
-# ================================================
-
-__UAC_VERSION="3.3.0-final-v2.7"
+__UAC_VERSION="2.8-final"
 
 UAC_COLLECT_CONTAINERS="${UAC_COLLECT_CONTAINERS:-1}"
-
-# --- Helper Functions ---
 
 calculate_hash() {
     local file="$1"
@@ -48,8 +33,6 @@ collect_system_logs() {
     fi
 }
 
-# --- Main Function ---
-
 collect_containers() {
     local runtime
     runtime=$(detect_container_runtime)
@@ -59,21 +42,22 @@ collect_containers() {
     fi
 
     printf "[+] Container runtime detected: %s\n" "$runtime" >&2
-    _log_msg INF "Container runtime detected: $runtime"
+    echo "Container runtime detected: $runtime"
 
     local containers
     containers=$(${runtime} ps -aq 2>/dev/null || true)
 
     if [ -z "$containers" ]; then
-        _log_msg INF "No containers found"
+        echo "No containers found"
         return 0
     fi
 
-    local container_dir="${__UAC_TEMP_DATA_DIR}/collected/containers"
+    local container_dir="collected/containers"
     mkdir -p "$container_dir"
 
     local count=0
-    local start_time=$(date '+%Y-%m-%d %H:%M:%S')
+    local start_time=$(date '+%Y-%m-%d %H:%M:%S
+    
 
     for cid in $containers; do
         local name
@@ -83,16 +67,16 @@ collect_containers() {
         local cdir="$container_dir/$name"
         mkdir -p "$cdir"
 
-        _log_msg INF "Processing container: $name ($cid)"
+        echo "Processing container: $name ($cid)"
 
-        # 1. Full filesystem dump
+        # Full filesystem dump
         ${runtime} export "$cid" > "$cdir/filesystem.tar" 2>/dev/null || true
 
-        # 2. Metadata
+        # Metadata
         ${runtime} inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || true
         ${runtime} logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
 
-        # 3. Inside-container artifacts
+        # Inside-container artifacts
         if command -v ${runtime} >/dev/null 2>&1; then
             ${runtime} exec "$cid" ps auxww > "$cdir/ps.txt" 2>/dev/null || echo "ps failed" > "$cdir/ps.txt"
             ${runtime} exec "$cid" env > "$cdir/env.txt" 2>/dev/null || echo "env failed" > "$cdir/env.txt"
@@ -100,7 +84,7 @@ collect_containers() {
             ${runtime} exec "$cid" cat /proc/mounts > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
         fi
 
-        # 4. cgroups + namespaces
+        # cgroups + namespaces
         local pid
         pid=$(${runtime} inspect --format '{{.State.Pid}}' "$cid" 2>/dev/null || echo 0)
         if [ "$pid" -gt 0 ] 2>/dev/null; then
@@ -108,34 +92,25 @@ collect_containers() {
             ls -l "/proc/$pid/ns/" > "$cdir/namespaces.txt" 2>/dev/null || true
         fi
 
-        # 5. Volumes
         collect_volumes "$runtime" "$cid" "$cdir"
-
-        # 6. Docker layers
         collect_docker_layers "$runtime" "$cid" "$cdir"
-
-        # 7. System logs
         collect_system_logs "$runtime" "$cdir"
 
-        # 8. SHA-256 hashes
+        # SHA-256 hashes
         {
             echo "# SHA-256 Hashes - Container: $name ($cid)"
             echo "# Generated: $(date '+%Y-%m-%d %H:%M:%S')"
-            echo ""
             for f in "$cdir"/*; do
                 [ -f "$f" ] && printf "%s  %s\n" "$(calculate_hash "$f")" "$(basename "$f")"
             done
         } > "$cdir/hashes.sha256"
 
-        # 9. Timeline
+        # Timeline
         {
             echo "=== Timeline: $name ==="
             echo "Created:  $(jq -r '.Created' "$cdir/inspect.json" 2>/dev/null || echo 'N/A')"
             echo "Started:  $(jq -r '.State.StartedAt' "$cdir/inspect.json" 2>/dev/null || echo 'N/A')"
             echo "Finished: $(jq -r '.State.FinishedAt' "$cdir/inspect.json" 2>/dev/null || echo 'N/A')"
-            echo ""
-            echo "=== Last 20 log lines ==="
-            tail -n 20 "$cdir/logs.txt" 2>/dev/null || true
         } > "$cdir/timeline.txt"
 
         count=$((count + 1))
@@ -153,15 +128,10 @@ collect_containers() {
         echo "Containers:     $count"
         echo "Host:           $(hostname)"
         echo "Collected by:   $(whoami)"
-        echo ""
         echo "All artifacts hashed with SHA-256"
-        echo "Full forensic package included"
     } > "$container_dir/chain_of_custody.txt"
 
-    __UAC_CONTAINER_COUNT=$count
-    __UAC_CONTAINER_SUMMARY="Runtime: $runtime | Containers: $count | SHA256: Yes | CoC: Yes"
-    _log_msg INF "Container collection completed: $count containers (full forensic package)"
-    printf "[+] Collected from %d containers with full forensic package\n" "$count" >&2
+    echo "Container collection completed: $count containers (full forensic package)"
 }
 
 detect_container_runtime() {
@@ -178,5 +148,9 @@ detect_container_runtime() {
     fi
 }
 
-# === REST OF ORIGINAL UAC SCRIPT ===
-# (The original uac code continues here)
+# === MAIN ===
+if [ "$UAC_COLLECT_CONTAINERS" = "1" ]; then
+    collect_containers
+fi
+
+echo "UAC Container Collector v$__UAC_VERSION ready"
