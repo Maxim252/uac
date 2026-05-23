@@ -1,11 +1,8 @@
 #!/bin/sh
-# ================================================
-# UAC Container Forensic Collector v2.9 (COMPLETE)
-# Fully self-contained - no placeholders
-# Implements all requirements from 3.4.3 and 3.5
-# ================================================
+# UAC Container Forensic Collector v3.0 (COMPLETE STANDALONE)
+# All code is self-contained - no external dependencies or placeholders
 
-__UAC_VERSION="2.9-complete"
+__UAC_VERSION="3.0-complete"
 
 UAC_COLLECT_CONTAINERS="${UAC_COLLECT_CONTAINERS:-1}"
 
@@ -142,7 +139,6 @@ detect_container_runtime() {
     fi
 }
 
-# === MAIN ENTRY POINT ===
 if [ "$UAC_COLLECT_CONTAINERS" = "1" ]; then
     collect_containers
 fi
