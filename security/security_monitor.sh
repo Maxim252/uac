@@ -58,6 +58,14 @@ _sm_check_profile_integrity() {
   [ "${__SM_ENABLED}" != "1" ] && return 0
 
   local profile_arg="$1"
+     # === УМНОЕ АВТООПРЕДЕЛЕНИЕ ПРОФИЛЯ (чтобы не писать export) ===
+  if [ -z "$profile_arg" ] || [ "$profile_arg" = "unknown" ]; then
+    profile_arg="${__UAC_PROFILE:-${UAC_PROFILE:-${PROFILE:-}}}"
+
+    if [ -z "$profile_arg" ] && [ -n "${__ua_command_line:-}" ]; then
+      profile_arg=$(echo "$__ua_command_line" | grep -oE '(-p|--profile)[ =]+[^ ]+' | head -1 | sed 's/.*[ =]//')
+    fi
+  fi 
   local allowed="${__SM_POLICY_DIR}/allowed_profiles.txt"
   local pname
   pname=$(basename "$profile_arg" .yaml)
@@ -173,7 +181,7 @@ _sm_log_event() {
   [ "${__SM_ENABLED}" != "1" ] && return 0
   local level="$1" operation="$2" details="$3" decision="$4" reason="$5"
   local version="${6:-${__SM_VERSION}}"
-  local ts=$(date '+%Y-%m-%d %H:%M:%S')
+  local ts="$(date '+%Y-%m-%d %H:%M:%S')"
 
   printf "%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n" \
     "$ts" "$level" "$operation" "$details" "$decision" "$reason" \
