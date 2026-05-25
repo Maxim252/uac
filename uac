@@ -46,155 +46,28 @@ __ua_command_line="${0} ${@}"
 _sm_init
 
 # ============================================================
-# FULL CONTAINER SUPPORT v2.2 (сбор из ВСЕХ контейнеров, включая остановленные)
+# ENHANCED CONTAINER COLLECTION SUPPORT
 # ============================================================
+# Deep forensic collection from container runtimes.
+# Implementation lives in lib/collect_containers.sh (sourced below).
+# See that file for configuration variables and details.
 
 __UAC_CONTAINER_COUNT=0
 __UAC_CONTAINER_SUMMARY=""
 
-    # Проверка наличия nsenter (полезно для fallback)
-    if ! command -v nsenter >/dev/null 2>&1; then
-        _log_msg WRN "nsenter not found - fallback will be limited"
-    fi
+# Early lightweight check for nsenter (used as powerful fallback later)
+if ! command -v nsenter >/dev/null 2>&1; then
+    # Direct output because this runs extremely early
+    printf "%s\n" "nsenter not found - deep container fallback will be limited" >&2
+fi
 
-# ============================================================
-# collect_containers() v2.5 — финальная версия
-# Собирает из Docker + Podman + nerdctl + crictl (включая остановленные)
-# ============================================================
-collect_containers() {
-    local runtimes="docker podman nerdctl crictl"
-    local forced_runtime="${UAC_CONTAINER_RUNTIME:-}"
-
-    if [ -n "$forced_runtime" ]; then
-        runtimes="$forced_runtime"
-    fi
-
-    local total_containers=0
-    local collected_runtimes=""
-
-    for runtime in $runtimes; do
-        if ! command -v "$runtime" >/dev/null 2>&1; then
-            continue
-        fi
-
-        # Проверка, что рантайм реально работает (более надёжная, чем "info")
-        if ! "$runtime" ps -q >/dev/null 2>&1; then
-            continue
-        fi
-
-        printf "[+] Container runtime detected: %s\n" "$runtime" >&2
-        _log_msg INF "Container runtime detected: $runtime"
-
-        local containers
-        containers=$("$runtime" ps -aq 2>/dev/null || true)
-
-        if [ -z "$containers" ]; then
-            continue
-        fi
-
-        local container_dir="${__UAC_TEMP_DATA_DIR}/collected/containers"
-        mkdir -p "$container_dir"
-
-        local count=0
-
-        for cid in $containers; do
-            local name
-            name=$("$runtime" inspect --format '{{.Name}}' "$cid" 2>/dev/null | sed 's|^/||')
-            [ -z "$name" ] && name="$cid"
-
-            local cdir="$container_dir/${runtime}_$name"
-            mkdir -p "$cdir"
-
-            _log_msg INF "Collecting from container ($runtime): $name ($cid)"
-
-            # === МЕТАДАННЫЕ ===
-            "$runtime" inspect "$cid" > "$cdir/inspect.json" 2>/dev/null || true
-            "$runtime" logs --since 24h "$cid" > "$cdir/logs.txt" 2>/dev/null || true
-
-            # === SNAPSHOT (работает даже на остановленных) ===
-            local snapshot_dir="$cdir/snapshot"
-            mkdir -p "$snapshot_dir"
-            "$runtime" export "$cid" > "$snapshot_dir/filesystem.tar" 2>/dev/null || true
-            echo "filesystem.tar" > "$snapshot_dir/snapshot_manifest.txt"
-
-            # === ВНУТРИКОНТЕЙНЕРНЫЙ СБОР ===
-            local state
-            state=$("$runtime" inspect --format '{{.State.Running}}' "$cid" 2>/dev/null || echo "false")
-
-            if [ "$state" = "true" ]; then
-                if command -v timeout >/dev/null 2>&1; then
-                    timeout 10 "$runtime" exec "$cid" sh -c "ps auxww"       > "$cdir/ps.txt"     2>/dev/null || echo "ps failed"     > "$cdir/ps.txt"
-                    timeout 5  "$runtime" exec "$cid" sh -c "env"            > "$cdir/env.txt"    2>/dev/null || echo "env failed"    > "$cdir/env.txt"
-                    timeout 5  "$runtime" exec "$cid" sh -c "netstat -tuln"  > "$cdir/netstat.txt" 2>/dev/null || echo "netstat failed" > "$cdir/netstat.txt"
-                    timeout 5  "$runtime" exec "$cid" sh -c "cat /proc/mounts" > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
-                else
-                    "$runtime" exec "$cid" sh -c "ps auxww"       > "$cdir/ps.txt"     2>/dev/null || echo "ps failed"     > "$cdir/ps.txt"
-                    "$runtime" exec "$cid" sh -c "env"            > "$cdir/env.txt"    2>/dev/null || echo "env failed"    > "$cdir/env.txt"
-                    "$runtime" exec "$cid" sh -c "netstat -tuln"  > "$cdir/netstat.txt" 2>/dev/null || echo "netstat failed" > "$cdir/netstat.txt"
-                    "$runtime" exec "$cid" sh -c "cat /proc/mounts" > "$cdir/mounts.txt" 2>/dev/null || echo "mounts failed" > "$cdir/mounts.txt"
-                fi
-            else
-                echo "Container not running - inside collection skipped" > "$cdir/ps.txt"
-                echo "Container not running - inside collection skipped" > "$cdir/env.txt"
-                echo "Container not running - inside collection skipped" > "$cdir/netstat.txt"
-                echo "Container not running - inside collection skipped" > "$cdir/mounts.txt"
-            fi
-
-            # === FALLBACK через nsenter ===
-            local pid
-            pid=$("$runtime" inspect --format '{{.State.Pid}}' "$cid" 2>/dev/null || echo 0)
-
-            if [ "$pid" -gt 0 ] 2>/dev/null && { [ ! -s "$cdir/ps.txt" ] || grep -q "failed" "$cdir/ps.txt" 2>/dev/null; }; then
-                nsenter --target "$pid" --mount --uts --ipc --net --pid ps auxww > "$cdir/ps.txt" 2>/dev/null || true
-                nsenter --target "$pid" --mount env > "$cdir/env.txt" 2>/dev/null || true
-                nsenter --target "$pid" --net netstat -tuln > "$cdir/netstat.txt" 2>/dev/null || true
-                nsenter --target "$pid" --mount cat /proc/mounts > "$cdir/mounts.txt" 2>/dev/null || true
-                echo "Used nsenter fallback for PID $pid" >> "$cdir/collection.log"
-            fi
-
-            # === CGROUPS и NAMESPACES ===
-            if [ "$pid" -gt 0 ] 2>/dev/null; then
-                cat "/proc/$pid/cgroup" > "$cdir/cgroup.txt" 2>/dev/null || true
-                ls -l "/proc/$pid/ns/" > "$cdir/namespaces.txt" 2>/dev/null || true
-            fi
-
-            count=$((count + 1))
-        done
-
-        total_containers=$((total_containers + count))
-        collected_runtimes="$collected_runtimes $runtime"
-        _log_msg INF "Container collection completed for $runtime: $count containers"
-    done
-
-    __UAC_CONTAINER_COUNT=$total_containers
-
-    if [ "$total_containers" -gt 0 ]; then
-        __UAC_CONTAINER_SUMMARY="Runtimes:${collected_runtimes} | Total: $total_containers (including stopped)"
-        printf "[+] Collected from %d containers across multiple runtimes\n" "$total_containers" >&2
-    else
-        __UAC_CONTAINER_SUMMARY="No containers found"
-    fi
-}
-
-detect_container_runtime() {
-    # Приоритет: переменная окружения > автоопределение
-    if [ -n "$UAC_CONTAINER_RUNTIME" ]; then
-        echo "$UAC_CONTAINER_RUNTIME"
-        return 0
-    fi
-
-    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-        echo "docker"
-    elif command -v podman >/dev/null 2>&1 && podman info >/dev/null 2>&1; then
-        echo "podman"
-    elif command -v nerdctl >/dev/null 2>&1; then
-        echo "nerdctl"
-    elif command -v crictl >/dev/null 2>&1; then
-        echo "crictl"
-    else
-        echo ""
-    fi
-}
+# Source the improved container collection module (see lib/collect_containers.sh)
+if [ -f "${__UAC_DIR}/lib/collect_containers.sh" ]; then
+    . "${__UAC_DIR}/lib/collect_containers.sh"
+elif [ -f "${__UAC_DIR}/lib_collect_containers.sh" ]; then
+    # Fallback for development (file is user-writable)
+    . "${__UAC_DIR}/lib_collect_containers.sh"
+fi
 
 if [ -z "${1}" ]; then
   _usage
@@ -270,11 +143,19 @@ _parse_command_line_arguments "${@}" || _exit_fatal
 # set -u cannot be set at the beginning of the script since it will fail on $@
 set -u
 
+# Note: CRIU checkpoint/restore support for containers is declared
+# but not yet implemented in the current container collection logic.
+# This stub prevents accidental use and documents the limitation.
 check_criu() {
     if ! command -v criu >/dev/null 2>&1; then
-        echo "[WARNING] CRIU не установлен. Checkpointing отключён." >&2
+        # Use direct printf because this runs very early (before __UAC_TEMP_DATA_DIR is set)
+        printf "%s\n" "CRIU not installed - container checkpointing is not available" >&2
         export COLLECT_CONTAINER_CHECKPOINT=0
         return 1
+    fi
+    # Only log via _log_msg after temp dir exists (this branch is rare)
+    if [ -n "${__UAC_TEMP_DATA_DIR:-}" ]; then
+        _log_msg INF "CRIU detected (container checkpointing support not yet wired into collect_containers)"
     fi
     return 0
 }
@@ -348,17 +229,17 @@ __ua_artifact_list=`_validate_artifact_list "${__UAC_ARTIFACT_LIST}"` || _exit_f
 
 
 if [ -n "${__UAC_PROFILE:-}" ]; then
-  echo ">>> [Security Monitor] Проверка целостности профиля: ${__UAC_PROFILE}" >&2
+  echo ">>> [Security Monitor] Verifying profile integrity: ${__UAC_PROFILE}" >&2
 
   if ! _sm_check_profile_integrity "${__UAC_PROFILE}"; then
     echo ""
-    echo ">>> [SECURITY MONITOR] ПРОФИЛЬ ПОДМЕНЁН ИЛИ ПОВРЕЖДЁН — ЗАПУСК ОСТАНОВЛЕН <<<"
+    echo ">>> [SECURITY MONITOR] PROFILE TAMPERED OR DAMAGED — ABORTING LAUNCH <<<"
     echo ""
     _sm_log_event "BLOCK" "PROFILE_CHECK" "${__UAC_PROFILE}" "BLOCK" "Direct profile integrity check failed" ""
-    _exit_fatal "Security Monitor: профиль отклонён (хэш не совпадает — возможна подмена)"
+    _exit_fatal "Security Monitor: profile rejected (hash mismatch — possible tampering)"
   fi
 
-  echo ">>> [Security Monitor] Профиль '${__UAC_PROFILE}' прошёл проверку." >&2
+  echo ">>> [Security Monitor] Profile '${__UAC_PROFILE}' passed verification." >&2
 fi
 
 _sm_authorize "load_profile" "${__UAC_PROFILE:-unknown}" || _exit_fatal "Security Monitor blocked profile load"
@@ -680,11 +561,11 @@ __ua_collection_progress=0
 __ua_collection_progress_total=`echo "${__ua_artifact_list}" | wc -l | awk '{print $1}'`
 _sm_authorize "artifact_list_built" "${__ua_collection_progress_total:-0} artifacts prepared" || true
 
-# === АВТОМАТИЧЕСКИЙ СБОР АРТЕФАКТОВ КОНТЕЙНЕРОВ (v2.2) ===
-if [ "$UAC_COLLECT_CONTAINERS" = "1" ]; then
+# === ENHANCED CONTAINER COLLECTION (runs before main artifact collection) ===
+if [ "${UAC_COLLECT_CONTAINERS:-1}" = "1" ]; then
     collect_containers
 fi
-# ==================================================
+# =============================================================================
 
 # acquisition start date
 __ua_acquisition_start_date=`date "+%a %b %d %H:%M:%S %Y %z"`
@@ -711,6 +592,11 @@ else
   fi
 
   _sm_authorize "collection_phase_start" "Starting collection of ${__ua_collection_progress_total} artifacts"  
+
+  # Explicit continuous integrity check before main collection loop
+  if command -v _sm_continuous_integrity_check >/dev/null 2>&1; then
+    _sm_continuous_integrity_check || _exit_fatal "Security Monitor: continuous integrity check failed before collection"
+  fi
   
   # shellcheck disable=SC2162
   while read __ua_artifact || [ -n "${__ua_artifact}" ]; do
@@ -739,9 +625,9 @@ _sm_authorize "collection_phase_finished" "Collection completed successfully" ||
 
 _log_msg INF "Artifacts collection completed in ${__ua_total_execution_time} seconds"
 
-if [ -n "$__UAC_CONTAINER_SUMMARY" ] && [ "$__UAC_CONTAINER_COUNT" -gt 0 ]; then
-    printf "Container collection: %s\n" "$__UAC_CONTAINER_SUMMARY"
-    _log_msg INF "Container collection: $__UAC_CONTAINER_SUMMARY"
+if [ -n "${__UAC_CONTAINER_SUMMARY}" ] && [ "${__UAC_CONTAINER_COUNT}" -gt 0 ]; then
+    printf "Container collection: %s\n" "${__UAC_CONTAINER_SUMMARY}"
+    _log_msg INF "Container collection: ${__UAC_CONTAINER_SUMMARY}"
 fi
 
 # === SECURITY MONITOR: копируем audit-лог в архив ===
@@ -836,7 +722,7 @@ else
   printf "Creating the output file...\n"
   cd "${__UAC_ARTIFACTS_OUTPUT_DIR}" || _exit_fatal "cd: ${__UAC_DIR}: No such file or directory"
 
-  # === Security Monitor: финальная проверка ===
+  # === Security Monitor: final packaging check ===
   _sm_authorize "before_final_packaging" "final check before creating archive"
 
   printf "Creating the output file...\n"

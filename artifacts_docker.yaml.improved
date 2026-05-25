@@ -1,0 +1,105 @@
+version: 2.0
+condition: command_exists "docker"
+output_directory: /live_response/containers/docker
+artifacts:
+  - description: List all containers (detailed).
+    supported_os: [linux]
+    collector: command
+    command: docker container ls --all --size --no-trunc
+    output_file: containers.txt
+
+  - description: List all images.
+    supported_os: [linux]
+    collector: command
+    command: docker image ls --all --digests
+    output_file: images.txt
+
+  - description: Docker system information.
+    supported_os: [linux]
+    collector: command
+    command: docker info
+    output_file: info.txt
+
+  - description: Docker version.
+    supported_os: [linux]
+    collector: command
+    command: docker version
+    output_file: version.txt
+
+  - description: Detailed disk usage.
+    supported_os: [linux]
+    collector: command
+    command: docker system df -v
+    output_file: system_df_v.txt
+
+  - description: Per-container inspect (full).
+    supported_os: [linux]
+    collector: command
+    foreach: docker container ps --all --format '{{.ID}}'
+    command: docker inspect %line%
+    output_file: inspect_%line%.json
+
+  - description: Per-container logs (last 24h).
+    supported_os: [linux]
+    collector: command
+    foreach: docker container ps --all --format '{{.ID}}'
+    command: docker logs --since 24h %line% 2>&1 || true
+    output_file: logs_%line%.txt
+
+  - description: Per-container top/processes.
+    supported_os: [linux]
+    collector: command
+    foreach: docker container ps --all --format '{{.ID}}'
+    command: docker top %line% 2>/dev/null || true
+    output_file: top_%line%.txt
+
+  - description: Per-container filesystem changes.
+    supported_os: [linux]
+    collector: command
+    foreach: docker container ps --all --format '{{.ID}}'
+    command: docker diff %line% 2>/dev/null || true
+    output_file: diff_%line%.txt
+
+  - description: Docker networks.
+    supported_os: [linux]
+    collector: command
+    command: docker network ls
+    output_file: networks.txt
+
+  - description: Detailed network inspection.
+    supported_os: [linux]
+    collector: command
+    foreach: docker network ls --format '{{.ID}}'
+    command: docker network inspect %line%
+    output_file: network_%line%.json
+
+  - description: Docker volumes.
+    supported_os: [linux]
+    collector: command
+    command: docker volume ls
+    output_file: volumes.txt
+
+  - description: Detailed volume inspection.
+    supported_os: [linux]
+    collector: command
+    foreach: docker volume ls --format '{{.Name}}'
+    command: docker volume inspect %line%
+    output_file: volume_%line%.json
+
+  - description: Docker plugins.
+    supported_os: [linux]
+    collector: command
+    command: docker plugin ls 2>/dev/null || true
+    output_file: plugins.txt
+
+  - description: Recent docker events (JSON lines).
+    supported_os: [linux]
+    collector: command
+    command: docker events --since 24h --format '{{json .}}' 2>/dev/null | tail -1000 || true
+    output_file: events_24h.jsonl
+
+  - description: Docker daemon configuration (if readable).
+    supported_os: [linux]
+    collector: command
+    command: cat /etc/docker/daemon.json 2>/dev/null || echo "daemon.json not readable or not present"
+    output_file: daemon.json

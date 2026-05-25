@@ -1,0 +1,65 @@
+version: 2.0
+condition: command_exists "podman"
+output_directory: /live_response/containers/podman
+artifacts:
+  - description: List all containers.
+    supported_os: [linux]
+    collector: command
+    command: podman container ls --all --size
+    output_file: containers.txt
+
+  - description: List all images.
+    supported_os: [linux]
+    collector: command
+    command: podman image ls --all
+    output_file: images.txt
+
+  - description: Podman system information.
+    supported_os: [linux]
+    collector: command
+    command: podman info
+    output_file: info.txt
+
+  - description: Podman version.
+    supported_os: [linux]
+    collector: command
+    command: podman version
+    output_file: version.txt
+
+  - description: Detailed system disk usage.
+    supported_os: [linux]
+    collector: command
+    command: podman system df -v
+    output_file: system_df_v.txt
+
+  - description: Full inspect per container.
+    supported_os: [linux]
+    collector: command
+    foreach: podman container ps --all --format '{{.ID}}'
+    command: podman inspect %line%
+    output_file: inspect_%line%.json
+
+  - description: Container logs (last 24h).
+    supported_os: [linux]
+    collector: command
+    foreach: podman container ps --all --format '{{.ID}}'
+    command: podman logs --since 24h %line% 2>&1 || true
+    output_file: logs_%line%.txt
+
+  - description: Podman networks.
+    supported_os: [linux]
+    collector: command
+    command: podman network ls
+    output_file: networks.txt
+
+  - description: Podman volumes.
+    supported_os: [linux]
+    collector: command
+    command: podman volume ls
+    output_file: volumes.txt
+
+  - description: Podman pods (if using pods).
+    supported_os: [linux]
+    collector: command
+    command: podman pod ls 2>/dev/null || true
+    output_file: pods.txt

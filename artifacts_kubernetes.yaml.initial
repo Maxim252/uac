@@ -1,0 +1,43 @@
+version: 2.0
+condition: command_exists "kubectl" || [ -S "/var/run/containerd/containerd.sock" ] || command_exists "crictl"
+output_directory: /live_response/containers/kubernetes
+artifacts:
+  - description: Kubernetes version and cluster info (if kubectl configured).
+    supported_os: [linux]
+    collector: command
+    command: kubectl version --client --output=yaml 2>/dev/null || echo "kubectl not configured or not present"
+    output_file: kubectl_version.txt
+
+  - description: List pods in all namespaces (if accessible).
+    supported_os: [linux]
+    collector: command
+    command: kubectl get pods --all-namespaces -o wide 2>/dev/null || echo "No cluster access or kubectl not available"
+    output_file: kubectl_pods.txt
+
+  - description: Kubelet configuration (common locations).
+    supported_os: [linux]
+    collector: command
+    command: cat /etc/kubernetes/kubelet.conf 2>/dev/null || cat /var/lib/kubelet/config.yaml 2>/dev/null || echo "Kubelet config not found in common locations"
+    output_file: kubelet_config.txt
+
+  - description: Kubelet logs (journal).
+    supported_os: [linux]
+    collector: command
+    command: journalctl -u kubelet --no-pager -n 2000 2>/dev/null || echo "kubelet service logs not available via journalctl"
+    output_file: kubelet_journal.log
+
+  - description: CRI socket information and crictl output.
+    supported_os: [linux]
+    collector: command
+    command: |
+      echo "=== crictl version ==="; crictl version 2>/dev/null || true
+      echo "=== crictl pods ==="; crictl pods 2>/dev/null || true
+      echo "=== crictl containers ==="; crictl ps -a 2>/dev/null || true
+      echo "=== CRI sockets ==="; ls -l /var/run/containerd/containerd.sock /var/run/crio/crio.sock /run/containerd/containerd.sock 2>/dev/null || true
+    output_file: cri_info.txt
+
+  - description: CNI configuration.
+    supported_os: [linux]
+    collector: command
+    command: find /etc/cni /opt/cni -type f 2>/dev/null | head -50 || echo "No CNI config found"
+    output_file: cni_config_files.txt

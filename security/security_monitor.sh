@@ -1,11 +1,13 @@
 #!/bin/sh
 # security/security_monitor.sh
-# Security Monitor v1.12 — Кибериммунный слой для UAC
-# Самопроверка при старте (бинарники + профиль)
-# ВКР: Мосейчук М.Л., ЮФУ, 2026
+# Security Monitor v1.13 — Cyber-immune integrity layer for UAC
+# Self-check on startup (binaries + profiles)
+# Improvements: fixed whitelist generator, consistent hashing, reduced duplication,
+# better internationalization, UAC_REGENERATE_WHITELIST=1 support.
+# Original concept: ВКР Мосейчук М.Л., ЮФУ, 2026
 
 __SM_INITIALIZED=0
-__SM_VERSION="1.12-kiberimmune"
+__SM_VERSION="1.13-improved"
 
 # ============================================================
 # Portable SHA256 hash function (работает на Linux, macOS, FreeBSD, Solaris)
@@ -57,15 +59,9 @@ _sm_check_binary_integrity() {
 _sm_check_profile_integrity() {
   [ "${__SM_ENABLED}" != "1" ] && return 0
 
-  local profile_arg="$1"
-     # === УМНОЕ АВТООПРЕДЕЛЕНИЕ ПРОФИЛЯ (чтобы не писать export) ===
-  if [ -z "$profile_arg" ] || [ "$profile_arg" = "unknown" ]; then
-    profile_arg="${__UAC_PROFILE:-${UAC_PROFILE:-${PROFILE:-}}}"
+  local profile_arg
+  profile_arg=$(_sm_resolve_profile_arg "$1")
 
-    if [ -z "$profile_arg" ] && [ -n "${__ua_command_line:-}" ]; then
-      profile_arg=$(echo "$__ua_command_line" | grep -oE '(-p|--profile)[ =]+[^ ]+' | head -1 | sed 's/.*[ =]//')
-    fi
-  fi 
   local allowed="${__SM_POLICY_DIR}/allowed_profiles.txt"
   local pname
   pname=$(basename "$profile_arg" .yaml)
@@ -94,7 +90,7 @@ _sm_check_profile_integrity() {
 
   local expected_hash current_hash
   expected_hash=$(echo "$expected_line" | cut -d: -f3)
-  current_hash=$(sha256sum "$profile_path" 2>/dev/null | awk '{print $1}')
+  current_hash=$(_sm_get_sha256 "$profile_path")
 
   if [ "$current_hash" != "$expected_hash" ]; then
     _sm_log_event "BLOCK" "PROFILE_CHECK" "$pname" "BLOCK" "Profile hash mismatch - possible tampering!" ""
@@ -111,11 +107,8 @@ _sm_check_profile_integrity() {
 _sm_auto_check_active_profile() {
   [ "${__SM_ENABLED}" != "1" ] && return 0
 
-  local profile="${__UAC_PROFILE:-}"
-
-  if [ -z "$profile" ] && [ -n "${__ua_command_line:-}" ]; then
-    profile=$(echo "$__ua_command_line" | grep -oE '\-p[ =]+[^ ]+' | head -1 | sed 's/^-p[ =]*//')
-  fi
+  local profile
+  profile=$(_sm_resolve_profile_arg "${__UAC_PROFILE:-}")
 
   [ -z "$profile" ] && return 0
 
@@ -123,13 +116,29 @@ _sm_auto_check_active_profile() {
 
   if ! _sm_check_profile_integrity "$profile"; then
     echo ""
-    echo ">>> [SECURITY MONITOR] ПРОФИЛЬ ПОДМЕНЁН ИЛИ ПОВРЕЖДЁН — ЗАПУСК ОСТАНОВЛЕН <<<"
+    echo ">>> [SECURITY MONITOR] PROFILE TAMPERED OR DAMAGED — ABORTING <<<"
     echo ""
     _sm_log_event "BLOCK" "AUTO_PROFILE_CHECK" "$profile" "BLOCK" "Tampered profile detected at startup" ""
     exit 1
   fi
 
   _sm_log_event "INFO" "AUTO_PROFILE_CHECK" "$profile" "ALLOW" "Profile verified automatically" ""
+}
+
+# Helper: resolve profile name from argument or command line (reduces duplication)
+_sm_resolve_profile_arg() {
+    local arg="$1"
+
+    if [ -z "$arg" ] || [ "$arg" = "unknown" ]; then
+        arg="${__UAC_PROFILE:-${UAC_PROFILE:-${PROFILE:-}}}"
+
+        if [ -z "$arg" ] && [ -n "${__ua_command_line:-}" ]; then
+            # Try --profile first, then -p
+            arg=$(echo "$__ua_command_line" | grep -oE '(--profile|-p)[ =]+[^ ]+' | head -1 | sed -E 's/.*[ =]//')
+        fi
+    fi
+
+    echo "$arg" | sed 's/\.yaml$//'
 }
 
 # ============================================================
@@ -167,7 +176,7 @@ _sm_verify_critical_components() {
 
   if [ "$failed" -gt 0 ]; then
     _sm_log_event "BLOCK" "SELF_CHECK" "$failed binaries failed integrity check" "BLOCK" "Critical failure" ""
-    echo "Security Monitor: Обнаружены повреждённые/подменённые бинарники ($failed). Работа остановлена." >&2
+    echo "Security Monitor: $failed binary file(s) failed integrity check. Aborting." >&2
     exit 1
   fi
 
@@ -191,6 +200,43 @@ _sm_log_event() {
 }
 
 # ============================================================
+# Непрерывный контроль целостности (Continuous Integrity Monitoring)
+# ============================================================
+_sm_continuous_integrity_check() {
+  [ "${__SM_ENABLED}" != "1" ] && return 0
+
+  # Re-verify the active profile
+  if ! _sm_check_profile_integrity ""; then
+    _sm_log_event "BLOCK" "CONTINUOUS_CHECK" "profile" "BLOCK" "Profile integrity failed during continuous check" ""
+    return 1
+  fi
+
+  # Re-verify critical binaries (only if whitelist exists)
+  local whitelist="${__SM_POLICY_DIR}/bin_whitelist.txt"
+  if [ -f "$whitelist" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      local bin_path
+      bin_path=$(echo "$line" | cut -d: -f1)
+      [ -z "$bin_path" ] && continue
+
+      case "$bin_path" in
+        /*) ;;
+        *) [ -n "${__UAC_DIR:-}" ] && bin_path="${__UAC_DIR}/${bin_path}" ;;
+      esac
+
+      if [ -f "$bin_path" ]; then
+        if ! _sm_check_binary_integrity "$bin_path"; then
+          _sm_log_event "BLOCK" "CONTINUOUS_CHECK" "$bin_path" "BLOCK" "Binary integrity failed during continuous check" ""
+          return 1
+        fi
+      fi
+    done < "$whitelist"
+  fi
+
+  return 0
+}
+
+# ============================================================
 # Централизованная авторизация (Default Deny)
 # ============================================================
 _sm_authorize() {
@@ -199,11 +245,25 @@ _sm_authorize() {
   shift
   local details="$*"
 
+  # Perform continuous integrity check before high-risk operations
+  case "$operation" in
+    execute_artifact_command|execute_binary|before_final_packaging|collection_phase_start)
+      if ! _sm_continuous_integrity_check; then
+        _sm_log_event "BLOCK" "$operation" "$details" "BLOCK" "Continuous integrity check failed" ""
+        return 1
+      fi
+      ;;
+  esac
+
   case "$operation" in
     load_profile)
       _sm_check_profile_integrity "$details" || return 1 ;;
     execute_binary)
       _sm_check_binary_integrity "$1" || return 1 ;;
+    execute_artifact_command)
+      # Log every command that comes from profiles/artifacts (high visibility)
+      # Future: could add command allow-listing or dangerous pattern detection here
+      _sm_log_event "INFO" "$operation" "$details" "ALLOW" "profile command execution" "" ;;
     config_loaded|artifact_list_built|collection_phase_start|collection_phase_finished|output_preparation|start_collection|before_manifest|before_final_packaging)
       _sm_log_event "INFO" "$operation" "$details" "ALLOW" "ok" "" ;;
     *)
@@ -248,8 +308,15 @@ _sm_init() {
 
   _sm_log_event "INFO" "SM_INIT" "Security Monitor started (self-check mode)" "ALLOW" "Active" "${__SM_VERSION}"
 
+  # Optional: regenerate whitelist on demand (very useful after UAC updates or adding custom tools)
+  if [ "${UAC_REGENERATE_WHITELIST:-0}" = "1" ]; then
+      _sm_generate_bin_whitelist
+  fi
+
   _sm_verify_critical_components
   _sm_auto_check_active_profile
+
+  _sm_log_event "INFO" "SM_INIT" "Audit log: ${__SM_LOG_FILE}" "ALLOW" "Initialized" ""
 
   __SM_INITIALIZED=1
 }
@@ -263,14 +330,25 @@ _sm_generate_bin_whitelist() {
     local dir="${__SM_POLICY_DIR:-./security/policies}"
     mkdir -p "$dir"
     local wl="$dir/bin_whitelist.txt"
-    > "$wl"
 
-    find "${__UAC_DIR:-.}/bin" -type f 2>/dev/null | while read f; do
+    # Use a temporary file + atomic move to avoid subshell redirection issues
+    local tmp_wl="${wl}.tmp.$$"
+    > "$tmp_wl"
+
+    find "${__UAC_DIR:-.}/bin" -type f 2>/dev/null | while IFS= read -r f; do
+        [ -f "$f" ] || continue
         local hash
         hash=$(_sm_get_sha256 "$f")
-        echo "$f:$hash" >> "$wl"
+        if [ -n "$hash" ] && [ "$hash" != "ERROR: No SHA256 tool found" ]; then
+            echo "$f:$hash" >> "$tmp_wl"
+        fi
     done
-    echo "Whitelist создан: $wl"
+
+    mv "$tmp_wl" "$wl" 2>/dev/null || cp "$tmp_wl" "$wl"
+    rm -f "$tmp_wl" 2>/dev/null || true
+
+    echo "Binary whitelist regenerated: $wl"
+    _sm_log_event "INFO" "WHITELIST_GEN" "$wl" "ALLOW" "Whitelist updated" ""
 }
 
 # Автозапуск

@@ -1,0 +1,39 @@
+version: 2.0
+condition: command_exists "ctr" || command_exists "crictl"
+output_directory: /live_response/containers/containerd
+artifacts:
+  - description: Containerd configuration dump.
+    supported_os: [linux]
+    collector: command
+    command: containerd config dump 2>/dev/null || ctr --namespace k8s.io info 2>/dev/null || true
+    output_file: config_dump.txt
+
+  - description: List containers via crictl (if available).
+    supported_os: [linux]
+    collector: command
+    command: crictl ps -a 2>/dev/null || ctr --namespace k8s.io containers list 2>/dev/null || true
+    output_file: crictl_ps.txt
+
+  - description: crictl images.
+    supported_os: [linux]
+    collector: command
+    command: crictl images 2>/dev/null || true
+    output_file: crictl_images.txt
+
+  - description: crictl pods (Kubernetes pods).
+    supported_os: [linux]
+    collector: command
+    command: crictl pods 2>/dev/null || true
+    output_file: crictl_pods.txt
+
+  - description: crictl stats.
+    supported_os: [linux]
+    collector: command
+    command: crictl stats -a 2>/dev/null || true
+    output_file: crictl_stats.txt
+
+  - description: Containerd namespace info.
+    supported_os: [linux]
+    collector: command
+    command: ctr --namespace k8s.io namespaces list 2>/dev/null || ctr namespaces list 2>/dev/null || true
+    output_file: namespaces.txt
