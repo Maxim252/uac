@@ -221,15 +221,91 @@ update_binaries() {
     log_success "Regenerated ${output_file} with ${total} entries."
 }
 
+update_core_scripts() {
+    dry_run="$1"
+    output_file="${POLICIES_DIR}/core_scripts_whitelist.txt"
+
+    log_info "Scanning core UAC scripts (entrypoint + security layer + critical libs)"
+
+    tmpfile=$(mktemp)
+    count=0
+
+    # Explicit list of critical scripts that must be protected (same set as in security_monitor.sh)
+    local core_scripts="
+uac
+security/security_monitor.sh
+security/update_whitelists.sh
+lib/exit_fatal.sh
+lib/load_libraries.sh
+lib/log_msg.sh
+lib/parse_command_line_arguments.sh
+lib/parse_profile.sh
+lib/validate_profile.sh
+"
+
+    for rel in $core_scripts; do
+        local full="${UAC_ROOT}/${rel}"
+        [ -f "$full" ] || { log_warn "Core script not found, skipping: $rel"; continue; }
+
+        local hash
+        hash=$(get_sha256 "$full")
+        if [ -z "$hash" ] || [ "$hash" = "ERROR: No SHA256 tool found" ]; then
+            log_warn "Failed to hash core script: $rel"
+            continue
+        fi
+
+        echo "${rel}:sha256:${hash}" >> "$tmpfile"
+        count=$((count + 1))
+        log_info "  ${rel} -> ${hash}"
+    done
+
+    if [ "$count" -eq 0 ]; then
+        log_error "No core scripts were hashed."
+        rm -f "$tmpfile"
+        return 1
+    fi
+
+    # Sort for determinism (consistent with other whitelists)
+    sort -o "$tmpfile" "$tmpfile"
+
+    # Append tamper-evident signature (identical algorithm)
+    local secret="UAC-SM-2026-kiberimmune-v1.13"
+    local content sig
+    content=$(cat "$tmpfile")
+    if command -v sha256sum >/dev/null 2>&1; then
+        sig=$(printf "%s%s" "$content" "$secret" | sha256sum 2>/dev/null | awk '{print $1}')
+    elif command -v shasum >/dev/null 2>&1; then
+        sig=$(printf "%s%s" "$content" "$secret" | shasum -a 256 2>/dev/null | awk '{print $1}')
+    else
+        sig=$(printf "%s%s" "$content" "$secret" | sha256 2>/dev/null | awk '{print $1}')
+    fi
+    echo "___SM_WHITELIST_SIG___:sha256:${sig}" >> "$tmpfile"
+
+    if [ "$dry_run" = "yes" ]; then
+        log_warn "DRY-RUN: Would write the following to ${output_file}:"
+        cat "$tmpfile"
+        rm -f "$tmpfile"
+        return 0
+    fi
+
+    backup_file "$output_file"
+    mv "$tmpfile" "$output_file"
+    chmod 644 "$output_file"
+
+    log_success "Regenerated ${output_file} with ${count} core script(s)."
+}
+
 # ====================== Main ======================
 
 DRY_RUN="no"
 DO_PROFILES="no"
 DO_BINARIES="no"
+DO_CORE="no"
 
 if [ $# -eq 0 ]; then
     DO_PROFILES="yes"
     DO_BINARIES="yes"
+    DO_CORE="yes"
 fi
 
 while [ $# -gt 0 ]; do
@@ -240,9 +316,13 @@ while [ $# -gt 0 ]; do
         --binaries)
             DO_BINARIES="yes"
             ;;
+        --core-scripts)
+            DO_CORE="yes"
+            ;;
         --all)
             DO_PROFILES="yes"
             DO_BINARIES="yes"
+            DO_CORE="yes"
             ;;
         --dry-run)
             DRY_RUN="yes"
@@ -278,6 +358,12 @@ if [ "$DO_BINARIES" = "yes" ]; then
     echo
 fi
 
+if [ "$DO_CORE" = "yes" ]; then
+    echo "=== Updating Core Scripts Whitelist ==="
+    update_core_scripts "$DRY_RUN"
+    echo
+fi
+
 if [ "$DRY_RUN" = "yes" ]; then
     log_warn "DRY-RUN completed. No files were modified."
 else
@@ -285,4 +371,5 @@ else
     log_info "You can verify the changes with:"
     log_info "  cat security/policies/allowed_profiles.txt"
     log_info "  head -20 security/policies/bin_whitelist.txt"
+    log_info "  cat security/policies/core_scripts_whitelist.txt"
 fi

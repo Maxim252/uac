@@ -117,6 +117,30 @@ else
     fail "update_whitelists.sh не найден или не является исполняемым"
 fi
 
+# Тест 7: Корректно подписанный core_scripts_whitelist.txt (uac + security_monitor)
+echo ""
+echo "[Тест 7] Корректно подписанный core_scripts_whitelist.txt"
+test_core="$TEST_TMP/core_scripts_whitelist.txt"
+create_signed_whitelist "$test_core" "uac:sha256:deadbeef123
+security/security_monitor.sh:sha256:cafebabe456"
+if _sm_verify_whitelist_file "$test_core"; then
+    pass "Корректно подписанный core_scripts_whitelist принят"
+else
+    fail "Корректно подписанный core_scripts_whitelist был отклонён"
+fi
+
+# Тест 8: Подделка core_scripts_whitelist (изменение хэша uac после подписания)
+echo ""
+echo "[Тест 8] Подделанный core_scripts_whitelist (изменён хэш uac)"
+printf '%s\n' "uac:sha256:EVIL_TAMPERED_UAC_HASH" "security/security_monitor.sh:sha256:cafebabe456" > "$test_core"
+orig_sig=$(_sm_compute_whitelist_signature "$(sed '$d' "$test_core")")
+printf '%s\n' "uac:sha256:EVIL_TAMPERED_UAC_HASH" "security/security_monitor.sh:sha256:cafebabe456" "___SM_WHITELIST_SIG___:sha256:$orig_sig" > "$test_core"
+if ! _sm_verify_whitelist_file "$test_core" 2>/dev/null; then
+    pass "Подделка core_scripts_whitelist (tampered uac hash) корректно отклонена"
+else
+    fail "Подделка core_scripts_whitelist НЕ обнаружена"
+fi
+
 if [ "$FAILED" -eq 0 ]; then
     echo ""
     echo "=== Все тесты обнаружения подделки пройдены ==="

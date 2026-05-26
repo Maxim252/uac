@@ -79,6 +79,63 @@ _sm_verify_whitelist_file() {
 }
 
 # ============================================================
+# Проверка целостности критически важных shell-скриптов UAC
+# (включая сам Security Monitor, update_whitelists.sh и entrypoint uac)
+# Решает проблему "курицы и яйца" — монитор теперь может проверять сам себя
+# после того, как он загружен, а bootstrap-проверка в uac защищает до загрузки.
+# ============================================================
+_sm_verify_core_scripts_whitelist() {
+    local wl="${__SM_POLICY_DIR}/core_scripts_whitelist.txt"
+    _sm_verify_whitelist_file "$wl"
+}
+
+_sm_check_core_script_integrity() {
+    [ "${__SM_ENABLED}" != "1" ] && return 0
+
+    local rel_path="$1"
+    local wl="${__SM_POLICY_DIR}/core_scripts_whitelist.txt"
+
+    if ! _sm_verify_core_scripts_whitelist; then
+        _sm_log_event "BLOCK" "CORE_SCRIPT_CHECK" "$rel_path" "BLOCK" "Core scripts whitelist is tampered" ""
+        return 1
+    fi
+
+    [ ! -f "$wl" ] && return 0
+
+    local expected_line expected_hash current_hash full_path
+    # Support both "uac" and "./uac" forms
+    expected_line=$(grep -E "^(\./)?${rel_path}:sha256:" "$wl" 2>/dev/null | head -1)
+
+    if [ -z "$expected_line" ]; then
+        _sm_log_event "BLOCK" "CORE_SCRIPT_CHECK" "$rel_path" "BLOCK" "Script not in core whitelist" ""
+        return 1
+    fi
+
+    expected_hash=$(echo "$expected_line" | cut -d: -f3)
+
+    # Resolve full filesystem path
+    case "$rel_path" in
+        /*) full_path="$rel_path" ;;
+        *)  full_path="${__UAC_DIR}/${rel_path}" ;;
+    esac
+
+    [ ! -f "$full_path" ] && {
+        _sm_log_event "BLOCK" "CORE_SCRIPT_CHECK" "$rel_path" "BLOCK" "File missing" ""
+        return 1
+    }
+
+    current_hash=$(_sm_get_sha256 "$full_path")
+
+    if [ "$current_hash" != "$expected_hash" ]; then
+        _sm_log_event "BLOCK" "CORE_SCRIPT_CHECK" "$rel_path" "BLOCK" "Core script hash mismatch - possible tampering!" ""
+        return 1
+    fi
+
+    _sm_log_event "INFO" "CORE_SCRIPT_CHECK" "$rel_path" "ALLOW" "Hash verified" ""
+    return 0
+}
+
+# ============================================================
 # Проверка целостности бинарников (кросс-платформенная)
 # ============================================================
 _sm_check_binary_integrity() {
@@ -253,6 +310,45 @@ _sm_verify_critical_components() {
   fi
 
   _sm_log_event "INFO" "SELF_CHECK" "Startup check passed. Checked: $checked binaries" "ALLOW" "All good" ""
+
+  # === NEW: Check core UAC scripts (uac entrypoint + Security Monitor + critical libs) ===
+  local core_wl="${__SM_POLICY_DIR}/core_scripts_whitelist.txt"
+  if [ -f "$core_wl" ]; then
+    if ! _sm_verify_core_scripts_whitelist; then
+      echo "Security Monitor: core_scripts_whitelist.txt signature verification failed!" >&2
+      _sm_log_event "BLOCK" "SELF_CHECK" "core_scripts_whitelist" "BLOCK" "Tampered core scripts whitelist at startup" ""
+      return 1
+    fi
+
+    _sm_log_event "INFO" "SELF_CHECK" "Starting core scripts integrity verification (uac + security layer)" "INFO" "Init phase" ""
+
+    local core_checked=0
+    local core_failed=0
+
+    while IFS= read -r line || [ -n "$line" ]; do
+      local script_rel
+      script_rel=$(echo "$line" | cut -d: -f1)
+      [ -z "$script_rel" ] && continue
+      case "$script_rel" in
+        ___SM_WHITELIST_SIG___*) break ;;
+        *)
+          script_rel=$(echo "$script_rel" | sed 's|^./||')
+          if [ -f "${__UAC_DIR}/${script_rel}" ]; then
+            core_checked=$((core_checked + 1))
+            _sm_check_core_script_integrity "$script_rel" || core_failed=$((core_failed + 1))
+          fi
+          ;;
+      esac
+    done < "$core_wl"
+
+    if [ "$core_failed" -gt 0 ]; then
+      _sm_log_event "BLOCK" "SELF_CHECK" "$core_failed core script(s) failed integrity check" "BLOCK" "Critical failure (core scripts)" ""
+      echo "Security Monitor: $core_failed core script file(s) failed integrity check. Aborting." >&2
+      exit 1
+    fi
+
+    _sm_log_event "INFO" "SELF_CHECK" "Core scripts OK. Checked: $core_checked files (uac + monitor + libs)" "ALLOW" "All good" ""
+  fi
 }
 
 # ============================================================
@@ -303,6 +399,28 @@ _sm_continuous_integrity_check() {
         fi
       fi
     done < "$whitelist"
+  fi
+
+  # Re-verify core UAC scripts (uac + security_monitor + critical libs)
+  local core_wl="${__SM_POLICY_DIR}/core_scripts_whitelist.txt"
+  if [ -f "$core_wl" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      local script_rel
+      script_rel=$(echo "$line" | cut -d: -f1)
+      [ -z "$script_rel" ] && continue
+      case "$script_rel" in
+        ___SM_WHITELIST_SIG___*) break ;;
+        *)
+          script_rel=$(echo "$script_rel" | sed 's|^./||')
+          if [ -f "${__UAC_DIR}/${script_rel}" ]; then
+            if ! _sm_check_core_script_integrity "$script_rel"; then
+              _sm_log_event "BLOCK" "CONTINUOUS_CHECK" "$script_rel" "BLOCK" "Core script integrity failed during continuous check" ""
+              return 1
+            fi
+          fi
+          ;;
+      esac
+    done < "$core_wl"
   fi
 
   return 0

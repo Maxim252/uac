@@ -40,6 +40,86 @@ __ua_command_line="${0} ${@}"
 # load lib files
 . "${__UAC_DIR}/lib/load_libraries.sh"
 
+# === EARLY BOOTSTRAP INTEGRITY CHECK (protects uac + Security Monitor before they are loaded) ===
+# This tiny self-contained verifier runs BEFORE sourcing security_monitor.sh.
+# It uses the same signature algorithm to detect tampering of the monitor itself
+# and the main uac entrypoint. This is the only way to close the chicken-egg gap.
+_sm_bootstrap_early_verify() {
+  local policy_dir="${__UAC_DIR}/security/policies"
+  local wl="$policy_dir/core_scripts_whitelist.txt"
+  local secret="UAC-SM-2026-kiberimmune-v1.13"
+
+  [ ! -f "$wl" ] && return 0
+
+  local content sig_line expected_sig computed
+
+  content=$(sed '$d' "$wl" 2>/dev/null)
+  sig_line=$(tail -1 "$wl" 2>/dev/null)
+
+  case "$sig_line" in
+    ___SM_WHITELIST_SIG___:sha256:*)
+      expected_sig=$(echo "$sig_line" | cut -d: -f3)
+      if command -v sha256sum >/dev/null 2>&1; then
+        computed=$(printf "%s%s" "$content" "$secret" | sha256sum 2>/dev/null | awk '{print $1}')
+      elif command -v shasum >/dev/null 2>&1; then
+        computed=$(printf "%s%s" "$content" "$secret" | shasum -a 256 2>/dev/null | awk '{print $1}')
+      elif command -v sha256 >/dev/null 2>&1; then
+        computed=$(printf "%s%s" "$content" "$secret" | sha256 2>/dev/null | awk '{print $1}')
+      else
+        # No hash tool available this early — fail open with warning (monitor will do stricter checks later)
+        printf "Warning: cannot verify core scripts integrity at bootstrap (no sha256 tool)\n" >&2
+        return 0
+      fi
+
+      if [ "$computed" != "$expected_sig" ]; then
+        echo "" >&2
+        echo ">>> [SECURITY] FATAL: core_scripts_whitelist.txt signature INVALID <<<" >&2
+        echo "Possible tampering of UAC core (uac, security_monitor.sh, or critical libs)." >&2
+        echo "Aborting BEFORE loading Security Monitor." >&2
+        echo "" >&2
+        exit 1
+      fi
+      ;;
+    *)
+      # No signature or legacy unsigned file — allow for now (monitor will warn later)
+      return 0
+      ;;
+  esac
+
+  # Signature OK — now verify hashes of the most critical files
+  for item in uac security/security_monitor.sh; do
+    local entry
+    entry=$(grep -E "^${item}:sha256:" "$wl" 2>/dev/null | head -1)
+    [ -z "$entry" ] && continue
+
+    local expected_h current_h tool_out
+    expected_h=$(echo "$entry" | cut -d: -f3)
+
+    if command -v sha256sum >/dev/null 2>&1; then
+      tool_out=$(sha256sum "${__UAC_DIR}/${item}" 2>/dev/null)
+    elif command -v shasum >/dev/null 2>&1; then
+      tool_out=$(shasum -a 256 "${__UAC_DIR}/${item}" 2>/dev/null)
+    elif command -v sha256 >/dev/null 2>&1; then
+      tool_out=$(sha256 "${__UAC_DIR}/${item}" 2>/dev/null)
+    else
+      continue
+    fi
+
+    current_h=$(echo "$tool_out" | awk '{print $1}')
+
+    if [ -n "$current_h" ] && [ "$current_h" != "$expected_h" ]; then
+      echo "" >&2
+      echo ">>> [SECURITY] FATAL: ${item} integrity violation detected at bootstrap <<<" >&2
+      echo "Hash mismatch — possible tampering of UAC core or Security Monitor." >&2
+      echo "Aborting before any monitor code runs." >&2
+      echo "" >&2
+      exit 1
+    fi
+  done
+}
+
+_sm_bootstrap_early_verify
+
 # === SECURITY MONITOR ===
 . "${__UAC_DIR}/security/security_monitor.sh"
 

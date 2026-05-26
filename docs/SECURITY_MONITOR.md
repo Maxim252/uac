@@ -72,6 +72,17 @@ ___SM_WHITELIST_SIG___:sha256:<подпись>
 ___SM_WHITELIST_SIG___:sha256:<подпись>
 ```
 
+**`security/policies/core_scripts_whitelist.txt`** (новый, защищает UAC + Security Monitor)
+```
+uac:sha256:<хэш>
+security/security_monitor.sh:sha256:<хэш>
+security/update_whitelists.sh:sha256:<хэш>
+lib/load_libraries.sh:sha256:<хэш>
+lib/parse_command_line_arguments.sh:sha256:<хэш>
+...
+___SM_WHITELIST_SIG___:sha256:<подпись>
+```
+
 ### 3.2 Механизм подписи
 
 Используется упрощённая HMAC-подобная конструкция:
@@ -91,7 +102,13 @@ __SM_WHITELIST_HMAC_SECRET="UAC-SM-2026-kiberimmune-v1.13"
 
 Скрипт `security/update_whitelists.sh` позволяет пересчитать подписи после обновления UAC.
 
-Рекомендуется запускать после любых изменений в `bin/` или `profiles/`.
+Рекомендуется запускать после любых изменений:
+```bash
+./security/update_whitelists.sh --all          # все три whitelist'а
+./security/update_whitelists.sh --core-scripts # только core (uac + монитор + критичные lib)
+```
+
+Рекомендуется запускать после любых изменений в `bin/`, `profiles/` или `security/`.
 
 ---
 
@@ -134,7 +151,7 @@ _sm_init
 | Переменная | Значение | Описание |
 |------------|----------|---------|
 | `UAC_SECURITY_MONITOR` | `1` / `0` | Включить/выключить монитор (по умолчанию 1) |
-| `UAC_REGENERATE_WHITELIST` | `1` | Перегенерировать `bin_whitelist.txt` при старте |
+| `UAC_REGENERATE_WHITELIST` | `1` | Перегенерировать `bin_whitelist.txt` при старте (также влияет на core_scripts при использовании update_whitelists.sh) |
 | `__SM_POLICY_DIR` | путь | Переопределить расположение политик (для тестов) |
 
 ---
@@ -206,6 +223,7 @@ timestamp|level|operation|details|decision|reason|user|hostname|pid|version
 - `security/security_monitor.sh`
 - `security/policies/allowed_profiles.txt`
 - `security/policies/bin_whitelist.txt`
+- `security/policies/core_scripts_whitelist.txt` (uac + монитор + критичные lib)
 - `security/update_whitelists.sh`
 - `lib_collect_containers.sh` (интеграция)
 - `tests/run_vkr_tests.sh`
