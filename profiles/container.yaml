@@ -1,0 +1,5 @@
+name: container
+description: "Автоматический сбор артефактов из контейнерных сред (Docker, Podman, Kubernetes)"
+artifacts:
+  - live_response/containers/*
+
