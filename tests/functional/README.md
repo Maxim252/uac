@@ -18,7 +18,7 @@ We specifically added negative tests for:
 
 ### Container Collection
 - `test_container_collection.sh` — Basic structure and key artifacts
-- `test_deep_container_artifacts.sh` — suspicious_config, filesystem export, nsenter, runtime forensics
+- `test_deep_container_artifacts.sh` — suspicious_config, container snapshots (export + commit+save), nsenter, runtime forensics
 
 ### Security Monitor
 - `test_monitor_core.sh` — Core authorization and initialization

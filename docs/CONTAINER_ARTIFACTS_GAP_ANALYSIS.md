@@ -7,7 +7,9 @@
 ## Current Strengths
 
 - Strong per-container metadata (inspect, logs, top, diff, security options, capabilities, image history).
-- Full filesystem export for stopped containers.
+- Dual container snapshot methods:
+  - `snapshot/filesystem.tar` (method 1: classic `export`)
+  - `snapshot/image.tar` (method 2: `commit` + `save` — layered, more efficient and forensically valuable)
 - Excellent deep inside-container view via nsenter fallback.
 - Good runtime-level collection (system df, info, some configs).
 - Solid declarative coverage via YAML for Docker and Podman.

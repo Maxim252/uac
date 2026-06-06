@@ -30,7 +30,7 @@
 - Function executes without crashing
 - Correct directory structure is created under `collected/containers/`
 - Metadata (`inspect.json`, `logs.txt`) is written
-- Snapshot export logic works (or is skipped when configured)
+- Snapshot logic (export + commit+save image.tar) works (or is skipped when configured)
 - Inside-container collection vs "not running" handling
 - nsenter fallback path (simulated)
 - Environment variable configuration (`UAC_CONTAINER_RUNTIMES`, size limits, etc.)
@@ -42,12 +42,14 @@ The mock scripts are simple shell scripts that respond to specific `docker` subc
 - `docker ps -aq`
 - `docker inspect ...`
 - `docker export ...`
+- `docker commit ...`, `docker save -o ...`, `docker rmi ...` (for the 2nd image snapshot method)
 - `docker logs ...`
 
 You can extend them to test edge cases:
 - Very large containers (trigger `UAC_CONTAINER_EXPORT_MAX_SIZE_MB`)
 - Containers without `ps` / `ss` inside
 - Failed `export`
+- Failed `commit` / `save` (image method)
 - Missing `nsenter`
 
 ## Running Against Real Docker (Advanced)

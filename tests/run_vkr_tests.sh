@@ -229,7 +229,8 @@ REAL_COLLECTIONS=$(find /tmp -maxdepth 2 -type d -name 'uac-*' -path '*/real*' 2
         echo "Что там лежит (примеры):"
         echo "    collected/containers/docker/<контейнер>/inspect.json"
         echo "    collected/containers/docker/<контейнер>/suspicious_config.txt"
-        echo "    collected/containers/docker/<контейнер>/snapshot/filesystem.tar"
+        echo "    collected/containers/docker/<контейнер>/snapshot/filesystem.tar (method 1: export)"
+        echo "    collected/containers/docker/<контейнер>/snapshot/image.tar (method 2: commit+save)"
         echo "    collected/containers/docker/info.txt, version.txt, system_df_v.txt"
         echo "    uac_security_monitor_audit.log  (журнал монитора)"
     else

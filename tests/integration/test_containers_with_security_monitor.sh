@@ -162,11 +162,11 @@ fi
 TESTS_RUN=$((TESTS_RUN + 1))
 if [ -n "$CONTAINER_DIR" ]; then
     SNAPSHOT_DIR="$CONTAINER_DIR/snapshot"
-    if [ -f "$SNAPSHOT_DIR/filesystem.tar" ] || [ -f "$SNAPSHOT_DIR/snapshot_manifest.txt" ]; then
-        pass "Filesystem export для stopped container подготовлен (или manifest)"
+    if [ -f "$SNAPSHOT_DIR/filesystem.tar" ] || [ -f "$SNAPSHOT_DIR/image.tar" ] || [ -f "$SNAPSHOT_DIR/snapshot_manifest.txt" ]; then
+        pass "Container snapshot (filesystem.tar или image.tar via commit+save) подготовлен (или manifest)"
         TESTS_PASSED=$((TESTS_PASSED + 1))
     else
-        info "Filesystem export не выполнен в этом сценарии мока (ожидаемо для running-only мока)"
+        info "Container snapshot не выполнен в этом сценарии мока (ожидаемо для running-only мока)"
     fi
 fi
 
@@ -203,13 +203,14 @@ if [ -n "$CONTAINER_DIR" ] && [ -d "$CONTAINER_DIR" ]; then
         cat "$CONTAINER_DIR/suspicious_config.txt" 2>/dev/null | sed 's|^|    |'
     fi
 
-    if [ -f "$CONTAINER_DIR/snapshot/filesystem.tar" ]; then
+    if [ -f "$CONTAINER_DIR/snapshot/filesystem.tar" ] || [ -f "$CONTAINER_DIR/snapshot/image.tar" ]; then
         echo ""
-        echo "    --- Filesystem export (остановленный контейнер) ---"
-        ls -lh "$CONTAINER_DIR/snapshot/filesystem.tar" 2>/dev/null | sed 's|^|    |'
-    elif [ -f "$CONTAINER_DIR/snapshot/snapshot_manifest.txt" ]; then
+        echo "    --- Container snapshot (остановленный контейнер) ---"
+        ls -lh "$CONTAINER_DIR/snapshot/"*.tar 2>/dev/null | sed 's|^|    |'
+    fi
+    if [ -f "$CONTAINER_DIR/snapshot/snapshot_manifest.txt" ]; then
         echo ""
-        echo "    --- Manifest filesystem export ---"
+        echo "    --- snapshot_manifest.txt ---"
         cat "$CONTAINER_DIR/snapshot/snapshot_manifest.txt" 2>/dev/null | sed 's|^|    |'
     fi
 else
@@ -391,7 +392,7 @@ if [ "$FAILED" -eq 0 ] && [ "$TESTS_PASSED" -eq "$TESTS_RUN" ]; then
         echo "       $CONTAINER_DIR"
         echo "       $CONTAINER_DIR/inspect.json"
         echo "       $CONTAINER_DIR/suspicious_config.txt"
-        echo "       $CONTAINER_DIR/snapshot/   (filesystem.tar или manifest)"
+        echo "       $CONTAINER_DIR/snapshot/   (filesystem.tar + image.tar (commit+save) или manifest)"
     fi
     echo ""
     echo "3. Реальный сбор контейнеров (если рантаймы были доступны):"
@@ -417,7 +418,7 @@ if [ "$FAILED" -eq 0 ] && [ "$TESTS_PASSED" -eq "$TESTS_RUN" ]; then
     echo ""
     echo "Выводы для ВКР:"
     echo "  • Расширенный сбор артефактов контейнеров полностью совместим с Монитором безопасности."
-    echo "  • Монитор не ломает создание runtime-директорий, per-container артефактов (inspect, logs, suspicious_config, filesystem export)."
+    echo "  • Монитор не ломает создание runtime-директорий, per-container артефактов (inspect, logs, suspicious_config, snapshot via export + commit+save)."
     echo "  • Механизм обнаружения подделки политик работает даже в контексте контейнерного сбора."
     echo "  • Контейнерные команды могут быть авторизованы через _sm_authorize (когда проходят через основной путь)."
     echo "  • Реальный сбор (при наличии docker/podman) успешно выполняется с включённым монитором."

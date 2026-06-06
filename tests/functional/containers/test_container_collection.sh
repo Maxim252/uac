@@ -71,6 +71,7 @@ touch "$__cc_cdir/hostconfig.json"
 touch "$__cc_cdir/capabilities.txt"
 touch "$__cc_cdir/suspicious_config.txt"
 touch "$__cc_cdir/snapshot/filesystem.tar"
+touch "$__cc_cdir/snapshot/image.tar"
 touch "$__cc_cdir/snapshot/snapshot_manifest.txt"
 
 count=$(find "$__cc_cdir" -type f | wc -l)
@@ -99,12 +100,12 @@ fi
 
 # Test 4: Stopped container handling
 echo ""
-echo "[Test 4] Stopped container filesystem export support"
+echo "[Test 4] Stopped container snapshot support (export + commit+save)"
 
-if [ -f "$__cc_cdir/snapshot/filesystem.tar" ]; then
-    pass "Filesystem export path exists for stopped containers"
+if [ -f "$__cc_cdir/snapshot/filesystem.tar" ] || [ -f "$__cc_cdir/snapshot/image.tar" ]; then
+    pass "Container snapshot artifacts (filesystem.tar / image.tar) prepared for stopped containers"
 else
-    fail "Filesystem export capability not prepared"
+    fail "Container snapshot capability not prepared"
 fi
 
 echo ""

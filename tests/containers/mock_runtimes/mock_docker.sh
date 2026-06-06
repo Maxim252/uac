@@ -92,6 +92,31 @@ JSON
             echo "Mock export completed: $OUTFILE" >&2
         fi
         ;;
+    commit)
+        # Simulate: docker commit CID temp-tag  (succeed)
+        echo "mock-commit: created temp image" >&2
+        ;;
+    save)
+        # Simulate: docker save TAG -o file
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -o)
+                    OUTFILE="$2"
+                    shift 2
+                    if [ -n "$OUTFILE" ]; then
+                        echo "mock layered image content via commit+save" | tar -cf "$OUTFILE" -T -
+                        echo "Mock save (image.tar via commit+save) completed: $OUTFILE" >&2
+                    fi
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        ;;
+    rmi)
+        # docker rmi -f temp-image  (succeed, no-op in mock)
+        ;;
 
     info)
         echo '{"ServerVersion":"24.0.0-mock"}'

@@ -32,6 +32,27 @@ JSON
         OUT="$1"
         echo "podman-mock-fs" | tar -cf "$OUT" -T -
         ;;
+    commit)
+        # podman commit ...
+        ;;
+    save)
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -o)
+                    OUT="$2"
+                    shift 2
+                    if [ -n "$OUT" ]; then
+                        echo "podman-layered-via-commit-save" | tar -cf "$OUT" -T -
+                    fi
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        ;;
+    rmi)
+        ;;
     *)
         echo "mock-podman: $CMD $*" >&2
         exit 0

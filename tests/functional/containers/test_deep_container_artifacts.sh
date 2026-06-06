@@ -57,16 +57,17 @@ else
 fi
 
 echo ""
-echo "[Test 2] Filesystem export for stopped containers"
+echo "[Test 2] Container snapshots for stopped containers (export + commit+save)"
 
 SNAPSHOT_DIR="$CDIR/snapshot"
 mkdir -p "$SNAPSHOT_DIR"
 echo "filesystem.tar" > "$SNAPSHOT_DIR/snapshot_manifest.txt"
+echo "image.tar" >> "$SNAPSHOT_DIR/snapshot_manifest.txt"
 
 if [ -f "$SNAPSHOT_DIR/snapshot_manifest.txt" ]; then
-    pass "Stopped container filesystem export manifest exists"
+    pass "Stopped container snapshot manifest exists (supports both methods)"
 else
-    fail "Filesystem export for stopped containers not prepared"
+    fail "Container snapshot manifest for stopped containers not prepared"
 fi
 
 echo ""

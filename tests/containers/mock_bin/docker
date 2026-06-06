@@ -135,6 +135,33 @@ JSON
             echo "Mock export successful: $OUTFILE" >&2
         fi
         ;;
+    commit)
+        # Simulate commit by accepting a container and a tag, do nothing heavy
+        # Usage in collector: docker commit CID temp-image-name
+        echo "mock-commit-image" >&2
+        ;;
+    save)
+        # Simulate save: create a small valid image tar when -o is used
+        # We look for -o <file>
+        while [ $# -gt 0 ]; do
+            case "$1" in
+                -o)
+                    OUTFILE="$2"
+                    shift 2
+                    if [ -n "$OUTFILE" ]; then
+                        echo "mock image layer content" | tar -cf "$OUTFILE" -T -
+                        echo "Mock save (image.tar) successful: $OUTFILE" >&2
+                    fi
+                    ;;
+                *)
+                    shift
+                    ;;
+            esac
+        done
+        ;;
+    rmi)
+        # Accept rmi -f temp-image  (just succeed silently for mocks)
+        ;;
 
     info)
         echo '{"ServerVersion":"24.0.0-mock"}'

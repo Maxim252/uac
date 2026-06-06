@@ -15,7 +15,16 @@
 #   UAC_COLLECT_CONTAINERS=0|1                 Enable/disable collection (default: 1)
 #   UAC_CONTAINER_RUNTIMES="docker podman ..." Override list of runtimes to check
 #   UAC_CONTAINER_EXEC_TIMEOUT=5               Timeout (seconds) for exec inside containers
-#   UAC_CONTAINER_EXPORT_MAX_SIZE_MB=0         Skip export if container > this size in MB (0 = no limit)
+#   UAC_CONTAINER_EXPORT_MAX_SIZE_MB=0         Skip snapshots (export + image) if container > this size in MB (0 = no limit)
+#   UAC_CONTAINER_IMAGE_SNAPSHOT=0|1           Enable 2nd snapshot method via 'commit' + 'save' (default: 1).
+#                                              Produces snapshot/image.tar (preserves layers + container diff layer).
+#                                              More complete and often more space-efficient than plain 'export'.
+#
+# Snapshot methods (per container):
+#   1. export   → snapshot/filesystem.tar   (flat rootfs, classic, works on crictl too)
+#   2. commit + save → snapshot/image.tar   (recommended; image tar with layers + diff)
+#   Both are attempted by default. Manifest (snapshot_manifest.txt) lists what was actually created.
+#   Temporary images created by method 2 are always cleaned up with "rmi -f".
 #
 # Functions provided:
 #   _collect_containers   - Main function (recommended)
@@ -39,6 +48,7 @@ _collect_containers() {
 
     __cc_exec_timeout="${UAC_CONTAINER_EXEC_TIMEOUT:-5}"
     __cc_export_max_mb="${UAC_CONTAINER_EXPORT_MAX_SIZE_MB:-0}"
+    __cc_image_snapshot="${UAC_CONTAINER_IMAGE_SNAPSHOT:-1}"
 
     _verbose_msg "Starting enhanced container collection (runtimes: ${__cc_runtimes})"
 
@@ -209,6 +219,10 @@ _collect_containers() {
             __cc_cdir="${__cc_runtime_dir}/${__cc_safe_name}_${__cc_cid}"
             mkdir -p "${__cc_cdir}" 2>/dev/null || true
 
+            # Fetch PID early (used by rootless hint block below and by nsenter block later).
+            # For stopped containers this will usually be 0.
+            __cc_pid=$("${__cc_runtime}" inspect --format '{{.State.Pid}}' "${__cc_cid}" 2>/dev/null || echo 0)
+
             _log_msg INF "Collecting container (${__cc_runtime}): ${__cc_name} (${__cc_cid})"
 
             # === Metadata ===
@@ -250,16 +264,24 @@ SecurityOpt: {{json .HostConfig.SecurityOpt}}
             # Rootless container hints (very relevant for Docker rootless and Podman rootless)
             if echo "${__cc_name}" | grep -qi rootless || [ -n "${XDG_RUNTIME_DIR:-}" ]; then
                 echo "Possible rootless container detected" > "${__cc_cdir}/rootless_hint.txt"
-                # Try to collect user namespace mapping info from host
-                cat "/proc/${__cc_pid}/uid_map" 2>/dev/null > "${__cc_cdir}/uid_map.txt" || true
-                cat "/proc/${__cc_pid}/gid_map" 2>/dev/null > "${__cc_cdir}/gid_map.txt" || true
+                # Try to collect user namespace mapping info from host (only valid if we have a live PID on the host)
+                if [ "${__cc_pid:-0}" -gt 0 ] 2>/dev/null; then
+                    cat "/proc/${__cc_pid}/uid_map" 2>/dev/null > "${__cc_cdir}/uid_map.txt" || true
+                    cat "/proc/${__cc_pid}/gid_map" 2>/dev/null > "${__cc_cdir}/gid_map.txt" || true
+                fi
             fi
 
-            # === Full filesystem export (works on stopped containers) ===
+            # === Container filesystem / image snapshots (two methods) ===
+            # Method 1 (classic): 'export'  -> snapshot/filesystem.tar (flat rootfs tar, loses layer info)
+            # Method 2 (additional): 'commit' + 'save' -> snapshot/image.tar (proper image tar with layers + diff)
+            #
+            # commit+save is often more efficient (reuses base image layers in the tar) and more
+            # forensically complete (preserves image history, config, and the exact layer diff
+            # introduced by the container). Both methods are attempted by default.
             __cc_snapshot_dir="${__cc_cdir}/snapshot"
             mkdir -p "${__cc_snapshot_dir}" 2>/dev/null || true
 
-            __cc_skip_export=false
+            __cc_skip_snapshot=false
             if [ "${__cc_export_max_mb}" -gt 0 ] 2>/dev/null; then
                 __cc_size=$("${__cc_runtime}" inspect --format '{{.SizeRootFs}}' "${__cc_cid}" 2>/dev/null || echo 0)
                 __cc_size_mb=0
@@ -267,20 +289,47 @@ SecurityOpt: {{json .HostConfig.SecurityOpt}}
                     __cc_size_mb=$(( __cc_size / 1024 / 1024 ))
                 fi
                 if [ "${__cc_size_mb}" -gt "${__cc_export_max_mb}" ]; then
-                    echo "Export skipped: estimated size ${__cc_size_mb}MB exceeds limit ${__cc_export_max_mb}MB" \
-                        > "${__cc_snapshot_dir}/export_skipped.txt"
-                    __cc_skip_export=true
-                    _log_msg WRN "Export skipped for large container ${__cc_name} (${__cc_size_mb}MB)"
+                    echo "Snapshot skipped (size ${__cc_size_mb}MB > limit ${__cc_export_max_mb}MB)" \
+                        > "${__cc_snapshot_dir}/snapshot_skipped.txt"
+                    __cc_skip_snapshot=true
+                    _log_msg WRN "Container snapshot skipped for ${__cc_name} (${__cc_size_mb}MB)"
                 fi
             fi
 
-            if [ "${__cc_skip_export}" = false ]; then
+            if [ "${__cc_skip_snapshot}" = false ]; then
+                # --- Method 1: docker/podman/nerdctl export (flat filesystem) ---
                 if "${__cc_runtime}" export "${__cc_cid}" > "${__cc_snapshot_dir}/filesystem.tar" 2>/dev/null; then
-                    echo "filesystem.tar" > "${__cc_snapshot_dir}/snapshot_manifest.txt"
+                    _log_msg INF "Filesystem export (method 1) succeeded for ${__cc_name}"
                 else
                     echo "export failed" > "${__cc_snapshot_dir}/export_failed.txt"
-                    _log_msg ERR "Filesystem export failed for container ${__cc_name}"
+                    _log_msg ERR "Filesystem export (method 1) failed for container ${__cc_name}"
                 fi
+
+                # --- Method 2: commit + save (image tar with layers) - the 2nd additional method ---
+                if [ "${__cc_image_snapshot}" = "1" ] && [ "${__cc_runtime}" != "crictl" ]; then
+                    __cc_temp_image="uac-snapshot-$(echo "${__cc_cid}" | cut -c1-12)-$$"
+                    __cc_image_tar="${__cc_snapshot_dir}/image.tar"
+
+                    if "${__cc_runtime}" commit "${__cc_cid}" "${__cc_temp_image}" >/dev/null 2>&1; then
+                        if "${__cc_runtime}" save "${__cc_temp_image}" -o "${__cc_image_tar}" 2>/dev/null; then
+                            _log_msg INF "Image snapshot via commit+save (method 2) created for ${__cc_name}"
+                        else
+                            echo "save after commit failed" > "${__cc_snapshot_dir}/image_save_failed.txt"
+                            _log_msg WRN "docker/podman save failed after commit for ${__cc_name}"
+                        fi
+                        # Clean up the temporary image we created (important!)
+                        "${__cc_runtime}" rmi -f "${__cc_temp_image}" >/dev/null 2>&1 || true
+                    else
+                        echo "commit failed" > "${__cc_snapshot_dir}/image_commit_failed.txt" 2>/dev/null || true
+                        _log_msg WRN "Container commit failed for ${__cc_name} (method 2)"
+                    fi
+                fi
+
+                # Write manifest listing what we actually captured
+                {
+                    [ -f "${__cc_snapshot_dir}/filesystem.tar" ] && echo "filesystem.tar"
+                    [ -f "${__cc_snapshot_dir}/image.tar" ] && echo "image.tar"
+                } > "${__cc_snapshot_dir}/snapshot_manifest.txt" 2>/dev/null || true
             fi
 
             # === Inside-container collection (only for running containers) ===
@@ -308,9 +357,8 @@ SecurityOpt: {{json .HostConfig.SecurityOpt}}
             fi
 
             # === nsenter fallback (extremely valuable for deep forensics) ===
-            __cc_pid=$("${__cc_runtime}" inspect --format '{{.State.Pid}}' "${__cc_cid}" 2>/dev/null || echo 0)
-
-            if [ "${__cc_pid}" -gt 0 ] 2>/dev/null; then
+            # (PID already fetched early; re-inspect is unnecessary but harmless if needed)
+            if [ "${__cc_pid:-0}" -gt 0 ] 2>/dev/null; then
                 # Always useful forensic artifacts
                 cat "/proc/${__cc_pid}/cgroup" 2>/dev/null > "${__cc_cdir}/cgroup.txt" || true
                 ls -l "/proc/${__cc_pid}/ns/" 2>/dev/null > "${__cc_cdir}/namespaces.txt" || true
