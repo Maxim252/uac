@@ -42,5 +42,12 @@ _tar_data()
   eval "${__td_tar_command}" \
     >>"${__UAC_TEMP_DATA_DIR}/tar_data.stdout.txt" \
     2>>"${__UAC_TEMP_DATA_DIR}/tar_data.stderr.txt"
+  __td_ret=$?
 
+  if [ "${__td_ret}" -ne 0 ]; then
+    _error_msg "tar command failed with exit code ${__td_ret}. See tar_data.stderr.txt for details."
+    return "${__td_ret}"
+  fi
+
+  return 0
 }

@@ -164,6 +164,8 @@ collected/containers/
 └── nerdctl/
 ```
 
+**Полное описание каждого файла, его значения и forensic-ценности** — см. отдельный справочник: [CONTAINER_DATA_REFERENCE.md](CONTAINER_DATA_REFERENCE.md).
+
 ---
 
 ## 6. Тестирование

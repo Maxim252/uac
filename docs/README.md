@@ -8,6 +8,7 @@
 |----------|----------|
 | [SECURITY_MONITOR.md](SECURITY_MONITOR.md) | Полное описание Монитора безопасности (архитектура, подписи, авторизация, аудит, интеграция) |
 | [CONTAINER_COLLECTION.md](CONTAINER_COLLECTION.md) | Описание расширенного сборщика артефактов из контейнеров (docker, podman, nerdctl и др.) |
+| [CONTAINER_DATA_REFERENCE.md](CONTAINER_DATA_REFERENCE.md) | **Полные таблицы + детальный разбор содержимого** всех артефактов для всех рантаймов (docker/podman/nerdctl/crictl + LXC/pct/jails/zones). Что именно лежит внутри inspect.json, hostconfig.json, suspicious_config.txt, snapshot/image.tar, proc_*.txt, journal-логов, uid_map и т.д. |
 | [VKR_Security_Monitor_Testing_Report.md](VKR_Security_Monitor_Testing_Report.md) | Отчёт о комплексном тестировании Монитора + контейнеров для защиты ВКР |
 
 ## Быстрый старт для ВКР

@@ -723,6 +723,50 @@ fi
 # prepare output
 printf "Фильтрация нерегулярных файлов...\n"
 
+# Compute collected size once (used for warning + disk space pre-check).
+__ua_collected_size_kb=0
+if [ -d "${__UAC_ARTIFACTS_OUTPUT_DIR}" ]; then
+  __ua_collected_size_kb=$(du -sk "${__UAC_ARTIFACTS_OUTPUT_DIR}" 2>/dev/null | awk '{print $1}')
+  if [ -n "${__ua_collected_size_kb}" ] && [ "${__ua_collected_size_kb}" -gt 1048576 ]; then  # > 1 GiB
+    __ua_collected_size_h=$(du -sh "${__UAC_ARTIFACTS_OUTPUT_DIR}" 2>/dev/null | awk '{print $1}')
+    printf "    [!] Внимание: собранные данные занимают ~%s. Создание выходного файла может занять длительное время.\n" "${__ua_collected_size_h}"
+    _log_msg WRN "Collected data size is large: ${__ua_collected_size_h}"
+  fi
+fi
+
+# Pre-check: ensure destination filesystem has enough space before we attempt
+# to create a potentially huge archive (or move the tree for "none").
+# Without this we get tar/gzip ENOSPC mid-write, followed by cascading
+# "cat: write error: No space left on device", "printf: I/O error", truncated logs etc.
+if [ "${__UAC_OUTPUT_FORMAT}" != "none" ] && [ "${__ua_collected_size_kb}" -gt 0 ]; then
+  __ua_avail_kb=$(_get_available_space "${__UAC_DESTINATION_DIR}")
+  if [ -n "${__ua_avail_kb}" ]; then
+    # Conservative estimates:
+    #   tar     : need at least collected size + 100 MiB headroom (no compression)
+    #   tar.gz/zip : collected/2 + 150 MiB (optimistic; many container layers compress poorly)
+    __ua_required_kb=${__ua_collected_size_kb}
+    if [ "${__UAC_OUTPUT_FORMAT}" = "tar.gz" ] || [ "${__UAC_OUTPUT_FORMAT}" = "zip" ]; then
+      __ua_required_kb=$(( __ua_collected_size_kb / 2 + 153600 ))
+    else
+      __ua_required_kb=$(( __ua_collected_size_kb + 102400 ))
+    fi
+    if [ "${__ua_avail_kb}" -lt "${__ua_required_kb}" ] 2>/dev/null; then
+      _error_msg "Недостаточно свободного места для создания выходного файла (No space left on device)."
+      _error_msg "  Каталог назначения : ${__UAC_DESTINATION_DIR}"
+      _error_msg "  Собранные данные   : ${__ua_collected_size_kb}K (~$(( __ua_collected_size_kb / 1024 ))M)"
+      _error_msg "  Доступно на ФС     : ${__ua_avail_kb}K (~$(( __ua_avail_kb / 1024 ))M)"
+      _error_msg "  Требуется (примерно): ${__ua_required_kb}K"
+      _error_msg "Рекомендации:"
+      _error_msg "  - Используйте --temp-dir /path/with/space  (сбор будет на большом разделе)"
+      _error_msg "  - Укажите -d /другой/раздел  (выходной файл на разделе с местом)"
+      _error_msg "  - Очистите раздел, на котором лежит временный/выходной каталог"
+      _error_msg "Check the collected artifacts in '${__UAC_TEMP_DATA_DIR}' for issues."
+      # Abort cleanly instead of letting later stages produce I/O errors and truncated messages.
+      exit 1
+    fi
+  fi
+fi
+
 # get a list of all files and directories whithin __UAC_TEMP_DATA_DIR/collected directory
 find "${__UAC_ARTIFACTS_OUTPUT_DIR}" -print >"${__UAC_TEMP_DATA_DIR}/find_collected.tmp" 2>/dev/null
 
@@ -794,9 +838,11 @@ if [ "${__UAC_OUTPUT_FORMAT}" = "none" ]; then
   if [ -d "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}" ]; then
     printf "Output directory successfully created: '%s'\n" "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}"
     _remove_temp_data_dir
+    __ua_packaging_status=0
   else
     _error_msg "Failed to create output directory: '${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}'"
     _error_msg "Check the collected artifacts in '${__UAC_TEMP_DATA_DIR}' for issues."
+    __ua_packaging_status=1
   fi
 else
   printf "Creating the output file...\n"
@@ -805,36 +851,22 @@ else
   # === Security Monitor: final packaging check ===
   _sm_authorize "before_final_packaging" "final check before creating archive"
 
-  printf "Creating the output file...\n"
-
-  # === ЯВНОЕ КОПИРОВАНИЕ AUDIT-ЛОГА МОНИТОРА В АРХИВ ===
+  # Copy Security Monitor audit log (if present) so it is included in the archive.
+  # We place a copy both under the temp data dir root and inside collected/ for robustness.
   if [ -f "/tmp/uac_security_monitor_audit.log" ]; then
-      cp "/tmp/uac_security_monitor_audit.log" "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log" 2>/dev/null || true
-
-      if command -v _log_msg >/dev/null 2>&1; then
-          _log_msg INF "Security Monitor audit log copied to output directory"
-      else
-          printf "Security Monitor audit log copied to output directory\n"
-      fi
-
-      # Дублируем в collected (чтобы точно попал в архив)
-      if [ -d "${__UAC_ARTIFACTS_OUTPUT_DIR}" ]; then
-          cp "/tmp/uac_security_monitor_audit.log" \
-             "${__UAC_ARTIFACTS_OUTPUT_DIR}/uac_security_monitor_audit.log" 2>/dev/null || true
-      fi
+    cp "/tmp/uac_security_monitor_audit.log" "${__UAC_TEMP_DATA_DIR}/uac_security_monitor_audit.log" 2>/dev/null || true
+    if [ -d "${__UAC_ARTIFACTS_OUTPUT_DIR}" ]; then
+      cp "/tmp/uac_security_monitor_audit.log" \
+         "${__UAC_ARTIFACTS_OUTPUT_DIR}/uac_security_monitor_audit.log" 2>/dev/null || true
+    fi
+    if command -v _log_msg >/dev/null 2>&1; then
+      _log_msg INF "Security Monitor audit log copied to output directory"
+    fi
   fi
 
   cd "${__UAC_ARTIFACTS_OUTPUT_DIR}" || _exit_fatal "cd: ${__UAC_DIR}: No such file or directory"
 
-  # === SECURITY MONITOR: копирование audit-лога ===
-  if [ -f "/tmp/uac_security_monitor_audit.log" ]; then
-    cp "/tmp/uac_security_monitor_audit.log" "${__UAC_TEMP_DATA_DIR}/" 2>/dev/null || true
-  fi 
-
-
-
-
- # add files to the beginning of the archive file
+  # add files to the beginning of the archive file
   {
     echo "${__UAC_LOG_FILE}";
     echo "hash_list.md5";
@@ -843,63 +875,72 @@ else
   } >"${__UAC_TEMP_DATA_DIR}/output.tmp"
   cat "${__UAC_TEMP_DATA_DIR}/pre_output.tmp" >>"${__UAC_TEMP_DATA_DIR}/output.tmp"
 
+  __ua_packaging_status=0
   case "${__UAC_OUTPUT_EXTENSION}" in
     "tar")
       _tar_data "${__UAC_TEMP_DATA_DIR}/output.tmp" \
         "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}"
+      __ua_packaging_status=$?
       ;;
     "tar.gz")
       _tar_gz_data "${__UAC_TEMP_DATA_DIR}/output.tmp" \
         "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}"
+      __ua_packaging_status=$?
       ;;
     "zip")
       _zip_data "${__UAC_TEMP_DATA_DIR}/output.tmp" \
         "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}" \
         "${__UAC_OUTPUT_PASSWORD}"
+      __ua_packaging_status=$?
       ;;
   esac
   cd "${__UAC_DIR}" || _exit_fatal "cd: ${__UAC_DIR}: No such file or directory"
-  if [ -f "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}" ]; then
+  if [ "${__ua_packaging_status}" -eq 0 ] && [ -f "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}" ]; then
     printf "Output file created: '%s'\n" "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}"
     _remove_temp_data_dir
   else
     _error_msg "Failed to create output file: '${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}'"
     _error_msg "Check the collected artifacts in '${__UAC_TEMP_DATA_DIR}' for issues."
+    # Do not remove temp dir on failure so user can inspect
   fi
 fi
 
-# hash output file
+# hash output file (only if packaging actually succeeded and the file exists)
 __ua_output_file_md5_hash=""
 __ua_output_file_sha1_hash=""
 __ua_output_file_sha256_hash=""
-if [ "${__UAC_OUTPUT_FORMAT}" != "none" ]; then
+__ua_output_file_path="${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}"
+if [ "${__UAC_OUTPUT_FORMAT}" != "none" ] && [ "${__ua_packaging_status:-1}" -eq 0 ] && [ -f "${__ua_output_file_path}" ]; then
   printf "Calculating output file hash...\n"
   if _is_in_list "md5" "${__UAC_CONF_HASH_ALGORITHM}" && [ -n "${__UAC_TOOL_MD5_BIN}" ]; then
-    __ua_hash_command="${__UAC_TOOL_MD5_BIN} \"${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}\""
+    __ua_hash_command="${__UAC_TOOL_MD5_BIN} \"${__ua_output_file_path}\""
     _verbose_msg "${__UAC_VERBOSE_CMD_PREFIX}${__ua_hash_command}"
     __ua_output_file_md5_hash=`eval "${__ua_hash_command}" | _grep_o "[0-9a-fA-F]\{32\}"`
   fi
   if _is_in_list "sha1" "${__UAC_CONF_HASH_ALGORITHM}" && [ -n "${__UAC_TOOL_SHA1_BIN}" ]; then
-    __ua_hash_command="${__UAC_TOOL_SHA1_BIN} \"${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}\""
+    __ua_hash_command="${__UAC_TOOL_SHA1_BIN} \"${__ua_output_file_path}\""
     _verbose_msg "${__UAC_VERBOSE_CMD_PREFIX}${__ua_hash_command}"
     __ua_output_file_sha1_hash=`eval "${__ua_hash_command}" | _grep_o "[0-9a-fA-F]\{40\}"`
   fi
   if _is_in_list "sha256" "${__UAC_CONF_HASH_ALGORITHM}" && [ -n "${__UAC_TOOL_SHA256_BIN}" ]; then
-    __ua_hash_command="${__UAC_TOOL_SHA256_BIN} \"${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.${__UAC_OUTPUT_EXTENSION}\""
+    __ua_hash_command="${__UAC_TOOL_SHA256_BIN} \"${__ua_output_file_path}\""
     _verbose_msg "${__UAC_VERBOSE_CMD_PREFIX}${__ua_hash_command}"
     __ua_output_file_sha256_hash=`eval "${__ua_hash_command}" | _grep_o "[0-9a-fA-F]\{64\}"`
   fi
 fi
 
-# create acquisition log file
+# create acquisition log file (best-effort; may fail if destination is full)
+__ua_acq_log_path="${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.log"
 if _create_acquisition_log \
-  "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.log" \
+  "${__ua_acq_log_path}" \
   "${__ua_acquisition_start_date}" \
   "${__ua_acquisition_end_date}" \
   "${__ua_output_file_md5_hash}" \
   "${__ua_output_file_sha1_hash}" \
   "${__ua_output_file_sha256_hash}"; then
-  printf "Acquisition log created: '%s'\n" "${__UAC_DESTINATION_DIR}/${__UAC_OUTPUT_BASE_NAME}.log"
+  if [ -f "${__ua_acq_log_path}" ]; then
+    printf "Acquisition log created: '%s'\n" "${__ua_acq_log_path}"
+  fi
 else
   _error_msg "Failed to create acquisition log."
 fi

@@ -408,6 +408,22 @@ SecurityOpt: {{json .HostConfig.SecurityOpt}}
         __UAC_CONTAINER_SUMMARY="Контейнеры не найдены"
     fi
 
+    # Report size of container artifacts (especially snapshots) so user is aware of final archive impact.
+    __cc_containers_dir="${__UAC_TEMP_DATA_DIR}/collected/containers"
+    if [ -d "${__cc_containers_dir}" ] && [ "${__cc_total}" -gt 0 ]; then
+        __cc_containers_size=$(du -sh "${__cc_containers_dir}" 2>/dev/null | awk '{print $1}')
+        _log_msg INF "Размер артефактов контейнеров: ${__cc_containers_size} (включая снимки ФС)"
+        # If running interactively / stderr is a tty, also surface a brief warning for large collections.
+        if [ -t 2 ] 2>/dev/null; then
+            case "${__cc_containers_size}" in
+                *[0-9]G|*[5-9][0-9][0-9]M)
+                    printf "    [!] Внимание: снимки контейнеров занимают %s. Финальный архив будет большим.\n" "${__cc_containers_size}" >&2
+                    printf "        Используйте UAC_CONTAINER_EXPORT_MAX_SIZE_MB=100 (или меньше) чтобы ограничить объём.\n" >&2
+                    ;;
+            esac
+        fi
+    fi
+
     _log_msg INF "Сбор контейнеров завершён. Всего контейнеров: ${__cc_total}"
 }
 

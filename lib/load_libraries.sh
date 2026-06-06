@@ -18,6 +18,7 @@
 . "${__UAC_DIR}/lib/filter_list.sh"
 . "${__UAC_DIR}/lib/find_based_collector.sh"
 . "${__UAC_DIR}/lib/get_absolute_path.sh"
+. "${__UAC_DIR}/lib/get_available_space.sh"
 . "${__UAC_DIR}/lib/get_bin_path.sh"
 . "${__UAC_DIR}/lib/get_cpu_info.sh"
 . "${__UAC_DIR}/lib/get_current_user.sh"

@@ -28,5 +28,12 @@ _zip_data()
   eval "${__zd_zip_command}" \
     >>"${__UAC_TEMP_DATA_DIR}/zip_data.stdout.txt" \
     2>>"${__UAC_TEMP_DATA_DIR}/zip_data.stderr.txt"
+  __zd_ret=$?
 
+  if [ "${__zd_ret}" -ne 0 ]; then
+    _error_msg "zip command failed with exit code ${__zd_ret}. See zip_data.stderr.txt for details."
+    return "${__zd_ret}"
+  fi
+
+  return 0
 }
