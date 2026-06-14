@@ -2,29 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
-## Unreleased / Local enhancements (2026)
+## Unreleased (2026)
 
-### Container collection (lib_collect_containers.sh)
+### Container collection (CRIU hot copy)
 
-- **Dual snapshot method** (основная доработка):
-  - Добавлен второй метод получения снимка контейнера: `commit` + `save` → `snapshot/image.tar`.
-  - Классический `export` сохранён как method 1 (`snapshot/filesystem.tar`).
-  - `commit + save` обычно эффективнее по размеру (переиспользует слои базового образа) и значительно ценнее для цифровой криминалистики (сохраняет историю слоёв, конфигурацию образа и точный diff-слой контейнера).
-  - После создания `image.tar` временный образ всегда удаляется командой `rmi -f`.
-  - Новый параметр окружения `UAC_CONTAINER_IMAGE_SNAPSHOT=1` (по умолчанию). Можно отключить: `UAC_CONTAINER_IMAGE_SNAPSHOT=0`.
-  - Ограничение `UAC_CONTAINER_EXPORT_MAX_SIZE_MB` теперь применяется одновременно к обоим методам.
-  - Поддержка: docker, podman, nerdctl. Для crictl доступен только метод export.
-
-- **Исправления стабильности**:
-  - Исправлена ошибка `__cc_pid: parameter not set`, возникавшая сразу после обнаружения runtime при установленной переменной `XDG_RUNTIME_DIR` (или при rootless-контейнерах). PID теперь запрашивается рано и защищён дефолтными значениями.
-
-- Обновлены моки (`tests/containers/mock_bin/*`, `mock_runtimes/*`), функциональные и интеграционные тесты, а также документация.
-
-### Documentation
-- Существенно расширена и переработана [docs/CONTAINER_COLLECTION.md](docs/CONTAINER_COLLECTION.md):
-  - Добавлено подробное сравнение двух методов снимков (таблица + мотивация).
-  - Обновлены описания переменных окружения, структуры артефактов, ограничений и рекомендаций.
-  - Добавлен раздел «История доработок модуля».
+- Полный отказ от legacy-команд (`docker/podman/nerdctl/crictl/ctr export|commit|save`).
+- Основной механизм: CRIU checkpoint (`--leave-running`).
+  - podman: полная (нативный `--export`, приоритет №1).
+  - containerd/nerdctl/crictl: хорошая (ctr + direct criu dump).
+  - docker: базовая (experimental `checkpoint create` + обязательное предупреждение "EXPERIMENTAL").
+- Новые артефакты: `criu_version.txt`, `snapshot/checkpoint.tar.gz`, `checkpoint_info.txt`, `checkpoint_manifest.txt`, `checkpoint_skipped.txt`.
+- Новые переменные: `UAC_CONTAINER_CHECKPOINT`, `UAC_CONTAINER_CHECKPOINT_MAX_SIZE_MB`, `UAC_CONTAINER_CHECKPOINT_LEAVE_RUNNING`.
+- Обновлены моки, тесты, документация.
+- `check_criu` в `uac` подключён к коллектору.
 
 ## 3.3.0 (2026-04-15)
 

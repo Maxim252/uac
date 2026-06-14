@@ -1,10 +1,9 @@
-# Расширенный сбор артефактов из контейнеров
+# Сбор артефактов контейнеров (CRIU hot copy)
 
 **Модуль:** `lib_collect_containers.sh`  
-**Версия:** Улучшенная (двойной метод снимков контейнеров: export + commit+save, поддержка остановленных контейнеров, nsenter, глубокий анализ конфигурации)  
-**Интеграция:** Полностью совместим с Монитором безопасности UAC
-
----
+**Механизм:** Только CRIU checkpoint (полный отказ от legacy export/commit/save).  
+**Поддержка:** podman (полная), containerd (хорошая), docker (базовая, experimental с предупреждением).  
+**Интеграция:** Совместим с Security Monitor.
 
 ## 1. Назначение
 
@@ -41,66 +40,46 @@
 | `config.json` / `hostconfig.json` | Конфигурация | ✓ | ✓ |
 | `suspicious_config.txt` | Выделенные индикаторы риска (privileged, hostPid, capabilities, seccomp=unconfined и т.д.) | ✓ | ✓ |
 | `logs.txt` | Логи контейнера (`docker logs --since 24h`) | ✓ | частично |
-| `snapshot/filesystem.tar` | Полный filesystem export (method 1: `export`, плоский rootfs) | — | ✓ (если возможно) |
-| `snapshot/image.tar` | Образ контейнера через commit+save (method 2, слои + diff-слой) | — | ✓ (если возможно) |
-| `snapshot/snapshot_manifest.txt` | Манифест (список реально созданных snapshot-файлов) | — | ✓ |
+| `snapshot/checkpoint.tar.gz` | CRIU checkpoint (горячее копирование). Основной артефакт состояния. Для podman — готов к `podman container restore --import`. | running only | — |
+| `snapshot/checkpoint_info.txt` | Метод сбора, флаги, статус, предупреждения (для docker — обязательно "EXPERIMENTAL") | running only | — |
+| `snapshot/checkpoint_manifest.txt` | Перечень реально созданных checkpoint-артефактов | — | ✓ |
+| `snapshot/checkpoint_skipped.txt` | Причина пропуска (контейнер не running / CRIU недоступен / лимит размера / UAC_CONTAINER_CHECKPOINT=0) | — | ✓ |
 | `cgroup.txt`, `namespaces.txt`, `cmdline`, `environ`, `status` | Host-side информация через nsenter | ✓ | — |
 
-### 2.3 Особенности для остановленных контейнеров
+### Поддержка горячего копирования
 
-- Два метода получения snapshot'а контейнера:
-  - Method 1: `docker export` / `podman export` → `snapshot/filesystem.tar` (плоский tar rootfs)
-  - Method 2 (дополнительный): `commit` + `save` → `snapshot/image.tar` (полноценный образ с слоями и diff-слоем контейнера)
-- Сохранение manifest'а (`snapshot_manifest.txt`)
-- Сбор исторических логов
+**Жёсткое требование:** legacy команды (`export`, `commit`, `save` и аналоги ctr) не используются никогда.
 
-### 2.4 Два метода получения снимков контейнера (export vs commit + save)
+Горячее копирование (CRIU checkpoint с `--leave-running` по умолчанию) — единственный механизм снимков состояния.
 
-**Мотивация**
+**Уровни поддержки:**
 
-Оригинальный метод `export` (и его аналоги в podman/nerdctl) создаёт плоский tar-архив текущего состояния файловой системы контейнера. Это просто «слепок корневой ФС» на момент сбора. У такого подхода есть существенные недостатки:
+| Runtime          | Уровень     | Реализация                                      | Примечание |
+|------------------|-------------|-------------------------------------------------|------------|
+| podman           | Полная (№1) | `podman container checkpoint --leave-running --export=...` | Восстанавливаемый tar. |
+| containerd/nerdctl/crictl | Хорошая    | `ctr checkpoint` + прямой `criu dump`           | Best-effort. |
+| docker           | Базовая     | `docker checkpoint create` (экспериментально)   | Обязательное предупреждение "EXPERIMENTAL" в `checkpoint_info.txt`. |
 
-- **Неэффективность по размеру** — весь filesystem выгружается целиком, без переиспользования слоёв базового образа.
-- **Потеря forensic-информации** — теряется история слоёв, метаданные образа, diff между базовым образом и изменениями, внесёнными в контейнере.
-- При больших образах и большом количестве контейнеров это приводит к избыточному размеру итогового архива UAC.
+**Артефакты в `snapshot/` (running-контейнеры):**
+- `checkpoint.tar.gz`
+- `checkpoint_info.txt` (метод, статус, предупреждения)
+- `checkpoint_manifest.txt`
 
-**Решение (дополнительный метод)**
+**Для stopped:** `checkpoint_skipped.txt` + host overlay layers (собираются на уровне runtime).
 
-Добавлен второй метод на базе `commit` + `save`:
+**Переменные окружения:**
+- `UAC_CONTAINER_CHECKPOINT=1` (по умолчанию)
+- `UAC_CONTAINER_CHECKPOINT_MAX_SIZE_MB=0`
+- `UAC_CONTAINER_CHECKPOINT_LEAVE_RUNNING=1`
 
-1. `docker commit <container> <temp-image>` — создаёт новый образ из текущего состояния контейнера (все изменения контейнера сохраняются в виде нового слоя поверх существующей истории образа).
-2. `docker save <temp-image> -o snapshot/image.tar` — сохраняет образ в стандартном формате Docker image tar (слои + манифест + конфигурация).
-3. `docker rmi -f <temp-image>` — обязательная очистка временного образа (чтобы не засорять систему сборщика).
-
-**Сравнение методов**
-
-| Характеристика                  | `filesystem.tar` (export)          | `image.tar` (commit + save)                          |
-|--------------------------------|------------------------------------|-----------------------------------------------------|
-| Формат                         | Плоский tar rootfs                 | Полноценный Docker/OCI image tar                    |
-| Размер                         | Обычно больше (всё «расплющивается») | Часто меньше (переиспользуются слои базового образа) |
-| Сохранение слоёв / истории     | Нет                                | Да                                                  |
-| Метаданные образа (labels, config, entrypoint и т.д.) | Частично (только то, что есть в ФС) | Полностью                                           |
-| Возможность `docker load`      | Нет                                | Да                                                  |
-| Forensic-ценность              | Базовая (только текущие файлы)     | Высокая (видны изменения относительно базового образа) |
-| Поддержка runtime              | docker, podman, nerdctl, crictl    | docker, podman, nerdctl (crictl — не поддерживается) |
-| Очистка временных объектов     | Не требуется                       | Обязательный `rmi` временного образа                |
-
-**Рекомендации**
-
-- По умолчанию включены **оба** метода (`UAC_CONTAINER_IMAGE_SNAPSHOT=1`).
-- Для большинства forensic-задач предпочтительнее `image.tar` (method 2).
-- `filesystem.tar` оставлен для совместимости и для случаев, когда нужен именно «сырой» вид файловой системы без слоёв.
-- Ограничение размера (`UAC_CONTAINER_EXPORT_MAX_SIZE_MB`) применяется одновременно к обоим методам.
-
-**Пример отключения второго метода**
-
+Пример:
 ```bash
-UAC_CONTAINER_IMAGE_SNAPSHOT=0 ./uac -p full /mnt/evidence
+UAC_CONTAINER_CHECKPOINT=0 ./uac -p full /mnt/evidence
 ```
 
-### 2.5 Fallback через nsenter
+### Fallback через nsenter
 
-Для запущенных контейнеров, когда exec внутрь невозможен или ограничен, используется `nsenter` для получения информации из `/proc` хоста.
+Для запущенных контейнеров, когда exec внутрь невозможен или ограничен, используется `nsenter` для получения информации из `/proc` хоста (см. раздел 2.4 в DATA_REFERENCE).
 
 ---
 
@@ -111,14 +90,13 @@ UAC_CONTAINER_IMAGE_SNAPSHOT=0 ./uac -p full /mnt/evidence
 | `UAC_COLLECT_CONTAINERS` | `1` | Включить/выключить расширенный сбор контейнеров |
 | `UAC_CONTAINER_RUNTIMES` | `docker podman nerdctl crictl` | Список рантаймов для проверки |
 | `UAC_CONTAINER_EXEC_TIMEOUT` | `5` | Таймаут для команд внутри контейнера (сек) |
-| `UAC_CONTAINER_EXPORT_MAX_SIZE_MB` | `0` | Пропуск обоих snapshot-методов, если контейнер больше лимита в MB (0 = без лимита) |
-| `UAC_CONTAINER_IMAGE_SNAPSHOT` | `1` | Включить 2-й метод снимка через `commit` + `save` (`snapshot/image.tar`). 0 — отключить |
+| `UAC_CONTAINER_CHECKPOINT_MAX_SIZE_MB` | `0` | Пропуск CRIU checkpoint, если контейнер больше лимита в MB (0 = без лимита). Старое имя UAC_CONTAINER_EXPORT_MAX_SIZE_MB тоже читается для обратной совместимости |
+| `UAC_CONTAINER_CHECKPOINT_LEAVE_RUNNING` | `1` | Не останавливать контейнер после checkpoint (рекомендуется) |
 
 Пример:
 ```bash
 UAC_CONTAINER_RUNTIMES="docker podman" \
-UAC_CONTAINER_EXPORT_MAX_SIZE_MB=500 \
-UAC_CONTAINER_IMAGE_SNAPSHOT=1 \
+UAC_CONTAINER_CHECKPOINT_MAX_SIZE_MB=500 \
 ./uac -p ir_triage /mnt/evidence
 ```
 
@@ -148,6 +126,7 @@ collected/containers/
 │   ├── info.txt
 │   ├── version.txt
 │   ├── system_df_v.txt
+│   ├── criu_version.txt
 │   ├── journal_docker.log
 │   ├── overlay2_layers.txt
 │   └── <container_name>_<container_id>/
@@ -157,9 +136,10 @@ collected/containers/
 │       ├── suspicious_config.txt
 │       ├── logs.txt
 │       └── snapshot/
-│           ├── filesystem.tar          # method 1 (export)
-│           ├── image.tar               # method 2 (commit+save) — рекомендуется для forensics
-│           └── snapshot_manifest.txt   # перечень реально созданных файлов
+│           ├── checkpoint.tar.gz       # CRIU hot copy (podman native / docker exp / direct)
+│           ├── checkpoint_info.txt     # method, status, warnings (for docker: EXPERIMENTAL)
+│           ├── checkpoint_manifest.txt
+│           └── checkpoint_skipped.txt  # for stopped containers or when disabled
 ├── podman/
 └── nerdctl/
 ```
@@ -211,27 +191,20 @@ UAC_CONTAINER_RUNTIMES="docker podman" \
 
 ## 8. Ограничения
 
-- Snapshot'ы (и export, и commit+save) работают для stopped и running контейнеров.
-- `commit` + `save` (method 2) не поддерживается для crictl (только docker/podman/nerdctl).
-- После `commit` сборщик всегда выполняет `rmi -f` временного образа (чтобы не засорять систему сборщика).
+- CRIU checkpoint (hot copy) работает **только для running** контейнеров. Для stopped создаётся маркер `checkpoint_skipped.txt`.
+- Docker: только experimental путь (требует явного предупреждения в артефактах и логе).
+- Прямой criu dump (fallback) — best-effort; на реальных контейнерах с сетью, unix sockets, cgroupsv2 и т.д. может потребовать дополнительных флагов ядра / CRIU.
+- Для восстановления checkpoint'ов (podman container restore --import) — ответственность оператора; UAC только собирает.
 - nsenter требует прав root и наличия утилиты в PATH.
-- Некоторые рантаймы (crictl) поддерживаются ограниченно.
-- При очень большом количестве контейнеров сбор может занять значительное время.
+- Некоторые рантаймы (crictl) поддерживаются через fallback'и.
+- При очень большом количестве контейнеров сбор может занять значительное время + checkpoint'ы весят много (память + ФС).
 
-## 9. История доработок модуля (2026)
+## 9. История изменений (2026)
 
-### Двойной метод снимков контейнера
-- Реализован дополнительный метод получения образа контейнера через `commit` + `save` (`snapshot/image.tar`).
-- `export` сохранён как method 1 (`snapshot/filesystem.tar`) для совместимости.
-- Добавлена переменная окружения `UAC_CONTAINER_IMAGE_SNAPSHOT` (по умолчанию `1`).
-- Лимит размера (`UAC_CONTAINER_EXPORT_MAX_SIZE_MB`) теперь применяется к обоим методам.
-- Обновлены все моки, тесты и документация.
-- **Мотивация**: классический `export` неэффективен (создаёт плоский tar без переиспользования слоёв) и теряет важную forensic-информацию (история слоёв, метаданные образа, точный diff контейнера).
-
-### Стабильность
-- Исправлена ошибка `__cc_pid: parameter not set`, возникавшая при наличии `XDG_RUNTIME_DIR` в окружении или при имени контейнера, содержащем "rootless".
-  - PID теперь запрашивается сразу после определения имени контейнера.
-  - Доступ к `uid_map` / `gid_map` выполняется только при наличии валидного PID > 0.
+- Переход на CRIU hot copy как единственный механизм снимков состояния контейнеров.
+- Полный отказ от legacy export/commit/save.
+- Введены уровни поддержки и новые артефакты (см. выше).
+- Обновлены моки, тесты и документация.
 
 ---
 
@@ -245,4 +218,4 @@ UAC_CONTAINER_RUNTIMES="docker podman" \
 
 ---
 
-*Документ создан в рамках подготовки к защите ВКР (2026).*
+*Документ обновлён под новую модель сбора контейнеров (CRIU hot copy, полный отказ от legacy) — 2026.*

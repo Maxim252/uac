@@ -4,15 +4,18 @@
 **Date:** 2026-05-26  
 **Scope:** Docker, Podman, containerd (no Kubernetes/CRI-O/LXC)
 
-## Current Strengths
+## Current Strengths (CRIU hot-copy model)
 
-- Strong per-container metadata (inspect, logs, top, diff, security options, capabilities, image history).
-- Dual container snapshot methods:
-  - `snapshot/filesystem.tar` (method 1: classic `export`)
-  - `snapshot/image.tar` (method 2: `commit` + `save` — layered, more efficient and forensically valuable)
-- Excellent deep inside-container view via nsenter fallback.
-- Good runtime-level collection (system df, info, some configs).
-- Solid declarative coverage via YAML for Docker and Podman.
+- Strong per-container metadata (inspect, logs, security options, capabilities, image history, suspicious_config summary).
+- CRIU-based live checkpoint as the **only** snapshot mechanism:
+  - podman — full (native `container checkpoint --export`, restorable)
+  - containerd/nerdctl/crictl — good (ctr + direct criu dump)
+  - docker — basic (experimental `checkpoint create` **with mandatory EXPERIMENTAL warning** in `checkpoint_info.txt` and logs)
+- Strict: no `export`/`commit`/`save` or equivalent image-from-container commands are ever executed (hard requirement).
+- New audit artifacts: `criu_version.txt` (per runtime) + `checkpoint_info.txt` (method + status + warnings).
+- Excellent deep inside-container + host /proc view for running containers.
+- Rich runtime-level collection (journals, overlay layers, build cache, ctr lists, sockets, auth configs + CRIU presence).
+- Solid declarative coverage via YAML.
 
 ## Remaining Gaps (Prioritized for Docker / Podman / containerd)
 
@@ -20,7 +23,7 @@
 
 | # | Gap | Why Valuable | Current Coverage | Effort | Priority for Docker/Podman/containerd |
 |---|-----|--------------|------------------|--------|---------------------------------------|
-| 1 | **Storage driver deep metadata** (overlay2 layers, whiteouts, deleted files info) | Shows what was deleted/changed at filesystem level without full export | Only `system df -v` | Medium | **Very High** |
+| 1 | **Storage driver deep metadata** (overlay2 layers, whiteouts, deleted files info) | Shows what was deleted/changed at filesystem level without needing a full checkpoint tar | Only `system df -v` | Medium | **Very High** |
 | 2 | **Runtime daemon logs** (journal + file logs) | Critical for timeline, errors, container lifecycle events | Partial (just added journalctl for docker/containerd) | Low | **Very High** |
 | 3 | **Rootless container specifics** | User namespaces, subuid/subgid mappings, XDG_RUNTIME_DIR content | Almost none | Medium | **High** |
 | 4 | **Registry auth & pull history** | `.docker/config.json`, image pull events, auth tokens | Weak | Low-Medium | High |
@@ -39,7 +42,7 @@
 
 ### Things We Should Probably NOT Collect (or collect very carefully)
 
-- Full layer contents / full container filesystems without strict size limits.
+- Full layer contents or full CRIU checkpoint tars without strict size limits (UAC_CONTAINER_CHECKPOINT_MAX_SIZE_MB).
 - All environment variables and secrets from every container by default.
 - Full content of image layers.
 
@@ -73,7 +76,7 @@ Create a new profile or artifact list focused purely on containers:
 - **/var/lib structure (metadata)** → Improved recursive listings for overlay2, containers/storage, and containerd snapshotter.
 
 **Still recommended for future work:**
-- Deeper overlay2 layer analysis (whiteouts, layer sizes without full export)
+- Deeper overlay2 layer analysis (whiteouts, layer sizes without pulling the full checkpoint.tar.gz)
 - Stronger rootless container support
 - Runtime-level "suspicious containers" summary report
 - More extensive use of `ctr` for containerd

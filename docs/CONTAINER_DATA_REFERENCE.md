@@ -5,16 +5,15 @@
 - **Подробное описание того, что именно находится внутри каждого файла** (структура, типичные поля, примеры содержимого).
 - Forensic-ценность и различия между механизмами сбора.
 
-**Два механизма сбора (важно понимать разницу):**
+**Механизмы сбора:**
 
-1. **Глубокий сбор** (lib_collect_containers.sh) → `collected/containers/<runtime>/...`
-   - Структурированные JSON + специально обработанные файлы + снимки ФС + данные с хоста через /proc/nsenter.
-   - Работает для docker, podman, nerdctl (полно), crictl (ограниченно).
-   - Запускается автоматически при `UAC_COLLECT_CONTAINERS=1`, не зависит от профиля.
+1. **Глубокий сбор** (`lib_collect_containers.sh`) → `collected/containers/<runtime>/...`
+   - Метаданные + CRIU checkpoint (только для running) + `/proc` хоста.
+   - Автоматически при `UAC_COLLECT_CONTAINERS=1`.
+   - Legacy `export`/`commit`/`save` запрещены.
 
-2. **Декларативный сбор** (YAML: `artifacts/live_response/containers/*.yaml`) → `collected/live_response/containers/...`
-   - В основном сырой текстовый вывод CLI-команд.
-   - Включается только если профиль содержит `live_response/containers/*` (full, ir_triage, container и др.).
+2. **Декларативный сбор** (YAML `artifacts/live_response/containers/`) → `collected/live_response/containers/...`
+   - Сырой вывод команд (включается профилем).
 
 > Пример пути пользователя: `/tmp/uac_v24_nerdct/uac-kali-linux-20260606193016/containers/*` — это директория глубокого сбора для nerdctl.
 
@@ -28,6 +27,7 @@
 |----------------------------------------------|-----------------------------------|-----------------------------------------------------|-------------------------------|----------|
 | `info.txt`                                   | docker, podman, nerdctl, crictl   | `<runtime> info`                                    | Конфигурация демона, storage driver, security options, ресурсы | Высокая |
 | `version.txt`                                | docker, podman, nerdctl, crictl   | `<runtime> version`                                 | Версии клиента и сервера      | Средняя |
+| `criu_version.txt`                           | все (когда criu присутствует в PATH) | `criu --version` или маркер "not found"             | Версия CRIU (или доказательство его отсутствия) | Высокая (для аудита checkpoint механизма) |
 | `system_df_v.txt`                            | docker, podman, nerdctl           | `<runtime> system df -v`                            | Подробная статистика места (images, containers, volumes, build cache) | Высокая |
 | `journal_docker.log` / `journal_podman.log` / `journal_containerd.log` / `journal_buildkit.log` | все | `journalctl -u <unit>` (последние N строк) | События systemd unit: запуск, остановка, ошибки, сообщения от демона | Очень высокая (timeline) |
 | `docker.log`, `containerd.log` и др.         | все                               | Копии из `/var/log/`                                | Логи демонов в текстовом виде | Высокая |
@@ -53,9 +53,10 @@
 | `securityopt.json` / `capabilities.txt` | docker/podman/nerdctl      | SecurityOpt, CapAdd/CapDrop | Списки seccomp, apparmor, capabilities | Высокая |
 | `suspicious_config.txt`               | docker/podman/nerdctl        | Специальный отчёт | Ключевые риск-флаги в удобном текстовом виде (см. ниже подробный разбор) | **Очень высокая** |
 | `logs.txt`                            | все                          | Последние 24ч логов контейнера | Текстовый вывод stdout/stderr приложения | Высокая |
-| `snapshot/filesystem.tar`             | все (кроме очень больших)    | `export`         | Плоский tar rootfs контейнера на момент сбора | Средняя+ |
-| `snapshot/image.tar`                  | docker/podman/nerdctl        | `commit` + `save`| Полноценный образ tar (manifest + слои + diff-слой контейнера) | **Очень высокая** |
-| `snapshot/snapshot_manifest.txt`      | все                          | Список tar'ов    | Просто строки "filesystem.tar" и/или "image.tar" | Низкая (мета) |
+| `snapshot/checkpoint.tar.gz`          | running (кроме очень больших) | CRIU (podman native / ctr / direct / docker exp) | Архив checkpoint'а (память + FS diff). Для podman — восстановимый tar.gz | **Очень высокая** (состояние памяти!) |
+| `snapshot/checkpoint_info.txt`        | running                      | Метаданные       | Метод, флаги, статус, предупреждения (для docker — обязательно "EXPERIMENTAL") | Высокая |
+| `snapshot/checkpoint_manifest.txt`    | все                          | Список           | Что реально создано (checkpoint.tar.gz + ...) | Низкая (мета) |
+| `snapshot/checkpoint_skipped.txt`     | stopped / disabled           | Маркер           | Причина (не running / CRIU недоступен / лимит размера / UAC_CONTAINER_CHECKPOINT=0) | Средняя |
 | `ps.txt`, `env.txt`, `network.txt`, `mounts.txt` | docker/podman/nerdctl | Внутриконтейнерные команды или nsenter | Вывод ps, env, ss/netstat, mounts | Высокая (running) |
 | `cgroup.txt`, `namespaces.txt`        | docker/podman/nerdctl        | Host /proc/<pid> | Содержимое cgroup и список namespaces (cgroup, pid, net, mnt, ipc, uts...) | Высокая |
 | `proc_cmdline.txt`, `proc_environ*.txt`, `proc_status.txt`, `proc_exe.txt`, `proc_fd.txt`, `proc_maps.txt` и др. (всего ~12 файлов) | docker/podman/nerdctl | Прямые файлы из `/proc/<pid>/` хоста | См. подробный разбор ниже | Очень высокая |
@@ -223,45 +224,21 @@ IMAGE          CREATED       CREATED BY                                      SIZ
 
 **Ценность:** Видно, какие команды выполнялись при сборке образа (часто там остаются секреты в RUN, или видно, что образ собран злоумышленником).
 
-### 2.3 Снимки файловой системы
+### 2.3 Снимки состояния (CRIU hot copy)
 
-#### snapshot/filesystem.tar (Method 1)
-**Что внутри:** Обычный tar-архив, полученный через `<runtime> export <cid>`.
-- Содержит **плоскую** файловую систему контейнера (всё слито в один слой).
-- Корень архива = корень контейнера (`/bin`, `/etc`, `/app` и т.д.).
-- Нет информации о слоях, истории, метаданных образа.
+**Жёсткое правило:** Legacy `export`/`commit`/`save` запрещены. Единственный механизм — CRIU checkpoint (live, `--leave-running`).
 
-**Минусы:** Большой размер, теряется forensic-информация о том, что пришло из базового образа, а что добавлено/изменено в контейнере.
+**Артефакты (только для running):**
+- `snapshot/checkpoint.tar.gz` — архив (podman — restorable).
+- `snapshot/checkpoint_info.txt` — метод, статус, предупреждения (для docker — "EXPERIMENTAL").
+- `snapshot/checkpoint_manifest.txt`
 
-#### snapshot/image.tar (Method 2 — рекомендуется)
-**Что внутри:** Полноценный tar, созданный через `docker commit <cid> <temp>` + `docker save <temp> -o image.tar`.
+**Для stopped:** `snapshot/checkpoint_skipped.txt` + host overlay listings (runtime-level).
 
-Стандартная структура Docker/OCI image tar:
-```
-manifest.json
-repositories  (или index.json для новых форматов)
-<config-sha>.json
-<layer1-sha>/
-    layer.tar
-    VERSION
-    json
-<layer2-sha>/
-    layer.tar
-...
-<верхний diff-слой контейнера после commit>/
-    layer.tar   ← здесь находятся все изменения, сделанные внутри контейнера
-```
-
-В `manifest.json` есть ссылки на config и порядок слоёв. Верхний слой содержит только diff (добавленные/изменённые/удалённые файлы контейнера).
-
-**Ценность:** Можно `docker load -i image.tar`, потом запускать/анализировать как обычный образ. Видно точный diff между базовым образом и состоянием на момент сбора. Сохраняется история слоёв.
-
-#### snapshot/snapshot_manifest.txt
-Просто текстовый файл:
-```
-filesystem.tar
-image.tar
-```
+**Поддержка:**
+- podman: полная (нативный, приоритет №1).
+- containerd/nerdctl/crictl: хорошая (ctr + criu dump).
+- docker: базовая (experimental, с предупреждением).
 
 ### 2.4 Данные изнутри контейнера и с хоста (/proc + nsenter)
 
@@ -342,7 +319,7 @@ lrwxrwxrwx 1 root root 0 ... net -> 'net:[4026531992]'
 
 **Сравнение с глубоким сбором:**
 - Декларативный: больше "классических" команд (volume ls, network ls, diff, top, stats).
-- Глубокий: структурированные JSON + снимки всего FS + данные ядра хоста (/proc) + build cache + auth + suspicious summary + два вида snapshot'ов.
+- Глубокий: структурированные JSON + CRIU checkpoint (hot copy только для running) + данные ядра хоста (/proc) + build cache + auth + suspicious summary + host overlay listings + criu_version.txt.
 
 ---
 
@@ -363,7 +340,7 @@ LXC, pct, jls, zoneadm — списки и per-instance конфиги (см. т
 ## СВОДКА: ГДЕ ИСКАТЬ ЧТО
 
 - Хочешь быстро увидеть опасные контейнеры → `suspicious_config.txt` во всех поддиректориях `containers/*/`
-- Хочешь полный FS на момент сбора + историю изменений → `snapshot/image.tar` (предпочтительно) или `filesystem.tar`
+- Хочешь состояние памяти + FS diff running контейнера (лучший forensic snapshot) → `snapshot/checkpoint.tar.gz` + `checkpoint_info.txt` (CRIU hot copy). Для stopped — host overlay layers + metadata.
 - Хочешь процессы/сеть/окружение изнутри → `ps.txt`, `env.txt`, `network.txt` + `proc_environ_readable.txt`
 - Хочешь понять, как контейнер "вырвался" в host namespaces → `hostconfig.json` + `namespaces.txt` + `uid_map.txt`
 - Timeline событий демона → `journal_containerd.log` / `journal_docker.log`
